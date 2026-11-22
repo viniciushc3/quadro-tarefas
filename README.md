@@ -123,6 +123,16 @@ A função **`limparFotosAntigas()`** manda para a lixeira as fotos com mais de 
 (constante `DIAS_RETENCAO_FOTOS` no topo do `Code.gs`). Rode na mão quando quiser, ou execute uma vez
 **`criarGatilhoLimpezaFotos()`** para criar o gatilho diário que faz isso sozinho de madrugada.
 
+### Se a foto não aparecer na aprovação
+
+Rode **`testarDrive()`** no editor do Apps Script (menu de funções → Executar). Ele diz em português
+se a pasta, a gravação, o compartilhamento e a remoção estão funcionando — e, quando falha, mostra o
+motivo e o que fazer. O caso mais comum é a autorização do Drive não ter sido concedida: basta
+executar a função, aceitar a tela de permissões e publicar **Nova versão** da implantação.
+
+Quando o servidor recebe a tarefa mas não consegue guardar a imagem, a tarefa **não se perde**: ela
+é concluída normalmente e a área dos pais mostra o aviso *“Fotos não estão sendo salvas”* com o motivo.
+
 > ⚠️ **Ao atualizar o `Code.gs`, rode `setupPlanilha()` de novo.** Isso acrescenta as colunas
 > `precisa_foto` e `foto_url` ao fim das abas existentes (sem tocar nos dados) e pede a nova
 > autorização de acesso ao Google Drive. Depois publique **Nova versão** da implantação.

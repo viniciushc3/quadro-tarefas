@@ -472,3 +472,7 @@ input:focus, select:focus { outline: none; border-color: var(--roxo); }
   border-radius: 10px; background: var(--roxo-claro);
   display: grid; place-items: center; font-size: 1.4rem;
 }
+
+.resumo-item.destaque-aviso { grid-column: 1 / -1; }
+.resumo-item.destaque-aviso strong { font-size: 1rem; margin-bottom: 4px; }
+.resumo-item.destaque-aviso small { display: block; line-height: 1.4; }

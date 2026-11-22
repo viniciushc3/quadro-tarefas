@@ -175,6 +175,7 @@ function executar_(acao, p) {
     case 'salvar_config':   exigirPin_(p); return apiSalvarConfig_(p);
     case 'setup':           exigirPin_(p); return { ok: true, msg: setupPlanilha() };
     case 'limpar_fotos':    exigirPin_(p); return { ok: true, msg: limparFotosAntigas() };
+    case 'testar_drive':    exigirPin_(p); return { ok: true, msg: testarDrive() };
     default:
       throw new Error('Ação desconhecida: ' + acao);
   }
@@ -250,7 +251,7 @@ function apiConcluir_(p) {
           existente.foto_url = urlNova;
         }
       }
-      return { ok: true, duplicado: true, registro: existente, saldo: calcularSaldo_(registros) };
+      return { ok: true, duplicado: true, registro: existente, saldo: calcularSaldo_(registros), foto_erro: _erroFoto };
     }
 
     var tarefa = lerTabela_('tarefas').map(normalizarTarefa_).filter(function (t) { return t.id === tarefaId; })[0];
@@ -270,7 +271,7 @@ function apiConcluir_(p) {
     inserirLinha_('registros', novo);
 
     var todos = registros.concat([novo]);
-    return { ok: true, registro: novo, saldo: calcularSaldo_(todos) };
+    return { ok: true, registro: novo, saldo: calcularSaldo_(todos), foto_erro: _erroFoto };
   } finally {
     lock.releaseLock();
   }
@@ -293,6 +294,7 @@ function apiEnviarFoto_(p) {
     if (reg.foto_url) return { ok: true, duplicado: true, foto_url: reg.foto_url, registro: reg };
 
     var url = salvarFoto_(p.foto, reg.tarefa_id, reg.data);
+    if (!url) throw new Error(_erroFoto || 'Não foi possível salvar a foto');
     atualizarPorId_('registros', id, { foto_url: url });
     reg.foto_url = url;
     return { ok: true, foto_url: url, registro: reg };
@@ -627,7 +629,10 @@ function enriquecerRegistro_(r, tarefas, recompensas) {
  * grava um .jpg na pasta Fotos_Tarefas e devolve a URL de visualização direta.
  * Devolve '' quando não vier foto — nunca derruba a conclusão da tarefa.
  */
+var _erroFoto = '';
+
 function salvarFoto_(base64, tarefaId, data) {
+  _erroFoto = '';
   if (!base64) return '';
   try {
     var limpo = String(base64).replace(/^data:image\/[a-zA-Z+]+;base64,/, '').replace(/\s+/g, '');
@@ -649,8 +654,60 @@ function salvarFoto_(base64, tarefaId, data) {
     }
     return 'https://drive.google.com/thumbnail?id=' + arquivo.getId() + '&sz=w800';
   } catch (err) {
+    // A tarefa continua sendo concluída, mas o motivo da falha volta para o app.
+    _erroFoto = explicarErroFoto_(err);
     return '';
   }
+}
+
+/** Traduz o erro do Drive para algo acionável na tela do app. */
+function explicarErroFoto_(err) {
+  var m = String((err && err.message) || err || 'erro desconhecido');
+  if (/permission|autoriza|authoriz|scope|Drive/i.test(m)) {
+    return 'O script ainda não tem permissão para usar o Google Drive. Abra o Apps Script, ' +
+           'rode a função testarDrive() e aceite as permissões. Detalhe: ' + m;
+  }
+  if (/quota|storage|espaço/i.test(m)) return 'Sem espaço ou cota no Drive. Detalhe: ' + m;
+  return m;
+}
+
+/**
+ * Diagnóstico: roda no editor do Apps Script e diz, em português, se a parte
+ * de fotos está funcionando (pasta, gravação, compartilhamento e limpeza).
+ */
+function testarDrive() {
+  var passos = [];
+  try {
+    var pasta = pastaFotos_();
+    passos.push('✔ Pasta "' + PASTA_FOTOS + '" acessível (id ' + pasta.getId() + ')');
+
+    var bytes = Utilities.base64Decode('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDJooor7Q1P/9k=');
+    var arq = pasta.createFile(Utilities.newBlob(bytes, 'image/jpeg', 'teste_permissao.jpg'));
+    passos.push('✔ Gravação de imagem funcionando');
+
+    try {
+      arq.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      passos.push('✔ Compartilhamento por link liberado');
+    } catch (e2) {
+      passos.push('⚠ Não foi possível compartilhar por link (' + e2.message + '). ' +
+                  'As fotos só vão aparecer para quem estiver logado na sua conta Google.');
+    }
+
+    passos.push('   URL gerada: https://drive.google.com/thumbnail?id=' + arq.getId() + '&sz=w800');
+    arq.setTrashed(true);
+    passos.push('✔ Remoção funcionando (arquivo de teste descartado)');
+    passos.push('');
+    passos.push('TUDO CERTO — as fotos de comprovação devem funcionar no app.');
+  } catch (err) {
+    passos.push('✘ FALHOU: ' + explicarErroFoto_(err));
+    passos.push('');
+    passos.push('Como resolver: clique em Executar nesta mesma função, aceite a tela de ' +
+                'permissões do Google (Revisar permissões → Avançado → Acessar o projeto) e ' +
+                'rode de novo. Depois publique Nova versão da implantação.');
+  }
+  var txt = passos.join('\n');
+  Logger.log(txt);
+  return txt;
 }
 
 function pastaFotos_() {

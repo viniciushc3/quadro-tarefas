@@ -53,6 +53,7 @@ const CACHE_VAZIO = {
   pendentes: [],
   saldo_servidor: 0,
   mesada: {},
+  aviso_foto: '',
   atualizado_em: 0
 };
 
@@ -268,6 +269,13 @@ async function flush() {
       fila.shift();
       persistirFila();
       tentativas = 0;
+      // O servidor aceitou a tarefa mas não conseguiu guardar a foto.
+      if (resp.foto_erro) {
+        cache.aviso_foto = String(resp.foto_erro);
+        toast('⚠️ A foto não foi salva — veja o aviso na área dos pais');
+      } else if (resp.registro && resp.registro.foto_url) {
+        cache.aviso_foto = '';
+      }
       if (typeof resp.saldo === 'number') cache.saldo_servidor = resp.saldo - deltaFila();
       persistirCache();
     } catch (e) {
@@ -840,6 +848,10 @@ function renderResumoPais() {
   const m = cache.mesada.semana;
 
   alvo.innerHTML =
+    (cache.aviso_foto
+      ? '<div class="resumo-item alerta destaque-aviso"><strong>⚠️ Fotos não estão sendo salvas</strong>' +
+        '<small>' + escapar(cache.aviso_foto) + '</small></div>'
+      : '') +
     '<div class="resumo-item destaque">' +
       '<div class="linha"><small>Tarefas de hoje</small>' +
       '<span class="valor">' + feitas + '/' + basicas.length + '</span></div>' +
