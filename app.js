@@ -10,10 +10,29 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbyp7NOpGvkna3RvDMlQFsYM
  *  Constantes
  * ---------------------------------------------------------- */
 const K = {
-  cache: 'qt.cache.v1',
-  fila:  'qt.fila.v1',
-  pin:   'qt.pin.v1'
+  cache:    'qt.cache.v1',
+  fila:     'qt.fila.v1',
+  pin:      'qt.pin.v1',
+  destrava: 'qt.destrava.v1'
 };
+
+/* Rotas por hash — permitem salvar um link direto para a área dos pais. */
+const ROTAS = {
+  '':               ['crianca', 'abaTarefas'],
+  '#tarefas':       ['crianca', 'abaTarefas'],
+  '#loja':          ['crianca', 'abaLoja'],
+  '#pais':          ['pais',    'abaAprovacoes'],
+  '#pais/aprovar':  ['pais',    'abaAprovacoes'],
+  '#pais/tarefas':  ['pais',    'abaCrudTarefas'],
+  '#pais/premios':  ['pais',    'abaCrudRecompensas'],
+  '#pais/mesada':   ['pais',    'abaMesada']
+};
+const HASH_DA_ABA = {
+  abaTarefas: '#tarefas', abaLoja: '#loja',
+  abaAprovacoes: '#pais', abaCrudTarefas: '#pais/tarefas',
+  abaCrudRecompensas: '#pais/premios', abaMesada: '#pais/mesada'
+};
+const DIAS_DESTRAVA = 30;
 
 const PERIODOS = [
   { id: 'manha',    rotulo: 'Manhã',        emoji: '🌅' },
@@ -54,6 +73,9 @@ let timerRetry = null;
 let tentativas = 0;
 let pinDigitado = '';
 let aoValidarPin = null;
+let sessaoPais = false;
+let destravaAte = Number(carregar(K.destrava, 0)) || 0;
+let aplicandoRota = false;
 
 /* ------------------------------------------------------------
  *  Utilitários de armazenamento
@@ -508,7 +530,9 @@ function renderCrianca() {
   document.getElementById('nomeCrianca').textContent = nome;
 
   document.getElementById('statSaldo').textContent = saldoAtual();
-  document.getElementById('statStreak').textContent = streakAtual(hoje);
+  const streak = streakAtual(hoje);
+  document.getElementById('statStreak').textContent = streak;
+  document.getElementById('statStreakLabel').textContent = streak === 1 ? 'dia seguido' : 'dias seguidos';
   document.getElementById('lojaSaldo').textContent = saldoAtual();
 
   // progresso das básicas do dia
@@ -664,6 +688,7 @@ function renderLoja(hoje) {
  *  RENDER — pais
  * ---------------------------------------------------------- */
 function renderPais() {
+  renderResumoPais();
   renderPendentes();
   renderCrudTarefas();
   renderCrudRecompensas();
@@ -674,6 +699,36 @@ function renderPais() {
   const n = cache.pendentes.length;
   badge.textContent = n;
   badge.classList.toggle('oculto', n === 0);
+}
+
+function renderResumoPais() {
+  const alvo = document.getElementById('resumoPais');
+  if (!alvo) return;
+  const hoje = hojeISO();
+  const basicas = tarefasDoDia(hoje).filter(t => t.tipo === 'basica');
+  const feitas = basicas.filter(t => {
+    const r = registroDaTarefa(t.id, hoje);
+    return r && r.status !== 'rejeitada';
+  }).length;
+  const pct = basicas.length ? Math.round((feitas / basicas.length) * 100) : 0;
+  const nPend = cache.pendentes.length;
+  const m = cache.mesada.semana;
+
+  alvo.innerHTML =
+    '<div class="resumo-item destaque">' +
+      '<div class="linha"><small>Tarefas de hoje</small>' +
+      '<span class="valor">' + feitas + '/' + basicas.length + '</span></div>' +
+      '<div class="resumo-barra"><div style="width:' + pct + '%"></div></div>' +
+      '<small>' + escapar(cache.config.nome_crianca || '') +
+      ' · ' + saldoAtual() + (saldoAtual() === 1 ? ' ponto' : ' pontos') +
+      ' · ' + streakAtual(hoje) + (streakAtual(hoje) === 1 ? ' dia seguido' : ' dias seguidos') + '</small>' +
+    '</div>' +
+    '<div class="resumo-item' + (nPend ? ' alerta' : '') + '">' +
+      '<strong>' + nPend + '</strong><small>' +
+      (nPend === 1 ? 'pedido aguardando você' : 'pedidos aguardando você') + '</small>' +
+    '</div>' +
+    '<div class="resumo-item"><strong>' + (m ? dinheiro(m.valor_total) : '—') + '</strong>' +
+      '<small>mesada da semana' + (m ? ' · ' + m.pct_basicas + '% das obrigações' : '') + '</small></div>';
 }
 
 function renderPendentes() {
@@ -820,16 +875,24 @@ async function renderMesada() {
       '</div>';
   }
 
+  buscarMesada(periodoMesada);
+}
+
+async function buscarMesada(periodo) {
   if (!apiConfigurada() || !navigator.onLine) return;
   try {
-    const novo = await apiGet('resumo_mesada', { periodo: periodoMesada, hoje: hojeISO() });
-    cache.mesada[periodoMesada] = novo;
+    const novo = await apiGet('resumo_mesada', { periodo, hoje: hojeISO() });
+    cache.mesada[periodo] = novo;
     persistirCache();
-    if (vista === 'pais' && abaPais === 'abaMesada') renderMesada();
+    if (vista !== 'pais') return;
+    renderResumoPais();
+    if (abaPais === 'abaMesada' && periodo === periodoMesada) renderMesada();
   } catch (e) { /* mantém o cache */ }
 }
 
 function preencherFormConfig() {
+  const el = document.getElementById('linkPais');
+  if (el) el.textContent = linkDosPais();
   const f = document.getElementById('formConfig');
   f.nome_crianca.value = cache.config.nome_crianca || '';
   f.valor_mesada_base.value = cache.config.valor_mesada_base || '';
@@ -953,18 +1016,28 @@ function opt(valor, rotulo, atual) {
 /* ------------------------------------------------------------
  *  PIN
  * ---------------------------------------------------------- */
-function abrirPin(callback) {
+let aoCancelarPin = null;
+
+function abrirPin(callback, aoCancelar) {
   pinDigitado = '';
   aoValidarPin = callback;
+  aoCancelarPin = aoCancelar || null;
   document.getElementById('pinErro').classList.add('oculto');
   desenharPin();
   document.getElementById('modalPin').classList.remove('oculto');
 }
 
-function fecharPin() {
+function fecharPin(cancelado) {
   document.getElementById('modalPin').classList.add('oculto');
   pinDigitado = '';
   desenharPin();
+  if (cancelado && aoCancelarPin) { const f = aoCancelarPin; aoCancelarPin = null; f(); }
+}
+
+function concluirPin() {
+  destravarPais(document.getElementById('pinLembrar').checked);
+  fecharPin();
+  if (aoValidarPin) aoValidarPin();
 }
 
 function desenharPin() {
@@ -978,11 +1051,7 @@ async function validarPin() {
   const erro = document.getElementById('pinErro');
 
   // Verificação otimista: se já validamos esse PIN antes neste aparelho, entra na hora.
-  if (pinLocal && pin === String(pinLocal)) {
-    fecharPin();
-    if (aoValidarPin) aoValidarPin();
-    return;
-  }
+  if (pinLocal && pin === String(pinLocal)) { concluirPin(); return; }
   if (!navigator.onLine || !apiConfigurada()) {
     erro.textContent = pinLocal ? 'PIN incorreto' : 'Sem conexão para verificar o PIN';
     erro.classList.remove('oculto');
@@ -994,8 +1063,7 @@ async function validarPin() {
     if (r.valido) {
       pinLocal = pin;
       salvar(K.pin, pinLocal);
-      fecharPin();
-      if (aoValidarPin) aoValidarPin();
+      concluirPin();
     } else {
       erro.textContent = 'PIN incorreto';
       erro.classList.remove('oculto');
@@ -1012,12 +1080,55 @@ async function validarPin() {
 /* ------------------------------------------------------------
  *  Navegação
  * ---------------------------------------------------------- */
+function paisDestravado() {
+  return sessaoPais || Date.now() < destravaAte;
+}
+
+function destravarPais(lembrar) {
+  sessaoPais = true;
+  if (lembrar) {
+    destravaAte = Date.now() + DIAS_DESTRAVA * 86400000;
+    salvar(K.destrava, destravaAte);
+  }
+}
+
+function bloquearPais() {
+  sessaoPais = false;
+  destravaAte = 0;
+  salvar(K.destrava, 0);
+}
+
+/** Aplica a rota atual (hash) — é por aqui que o link direto dos pais entra. */
+function aplicarRota() {
+  const hash = location.hash.replace(/\/$/, '');
+  const rota = ROTAS[hash] || ROTAS[''];
+  const [alvoVista, alvoAba] = rota;
+
+  if (alvoVista === 'pais' && !paisDestravado()) {
+    abrirPin(
+      () => aplicarRota(),                                  // destravou: entra
+      () => { irPara('#tarefas'); }                         // cancelou: volta
+    );
+    return;
+  }
+
+  aplicandoRota = true;
+  mostrarVista(alvoVista);
+  trocarAba(alvoVista === 'pais' ? 'tabbarPais' : 'tabbarCrianca', alvoAba);
+  aplicandoRota = false;
+}
+
+function irPara(hash) {
+  if (location.hash === hash) aplicarRota();
+  else location.hash = hash;        // dispara hashchange -> aplicarRota()
+}
+
 function mostrarVista(qual) {
   vista = qual;
   document.getElementById('appCrianca').classList.toggle('oculto', qual !== 'crianca');
   document.getElementById('appPais').classList.toggle('oculto', qual !== 'pais');
   window.scrollTo(0, 0);
-  if (qual === 'pais') renderPais(); else renderCrianca();
+  if (qual === 'pais') { renderPais(); buscarMesada('semana'); } else renderCrianca();
 }
 
 function trocarAba(barraId, abaId) {
@@ -1028,6 +1139,10 @@ function trocarAba(barraId, abaId) {
   window.scrollTo(0, 0);
   if (barraId === 'tabbarCrianca') abaCrianca = abaId;
   else { abaPais = abaId; if (abaId === 'abaMesada') renderMesada(); }
+  if (!aplicandoRota && HASH_DA_ABA[abaId]) {
+    const h = HASH_DA_ABA[abaId];
+    if (location.hash !== h) { aplicandoRota = true; location.hash = h; setTimeout(() => { aplicandoRota = false; }, 0); }
+  }
 }
 
 /* ------------------------------------------------------------
@@ -1134,17 +1249,37 @@ document.getElementById('tabbarPais').addEventListener('click', e => {
   if (b) trocarAba('tabbarPais', b.dataset.aba);
 });
 
-document.getElementById('btnAbrirPais').addEventListener('click', () => {
-  abrirPin(() => mostrarVista('pais'));
+document.getElementById('btnAbrirPais').addEventListener('click', () => irPara('#pais'));
+
+document.getElementById('btnSairPais').addEventListener('click', () => irPara('#tarefas'));
+
+document.getElementById('btnEsquecerAparelho').addEventListener('click', () => {
+  bloquearPais();
+  toast('🔒 Área dos pais bloqueada neste aparelho');
+  irPara('#tarefas');
 });
 
-document.getElementById('btnSairPais').addEventListener('click', () => mostrarVista('crianca'));
+document.getElementById('btnCopiarLink').addEventListener('click', async () => {
+  const link = linkDosPais();
+  try {
+    await navigator.clipboard.writeText(link);
+    toast('🔗 Link copiado');
+  } catch (e) {
+    prompt('Copie o link da área dos pais:', link);
+  }
+});
+
+function linkDosPais() {
+  return location.origin + location.pathname + '#pais';
+}
+
+window.addEventListener('hashchange', aplicarRota);
 
 document.getElementById('tecladoPin').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
   const k = b.dataset.k;
-  if (k === 'cancel') return fecharPin();
+  if (k === 'cancel') return fecharPin(true);
   if (k === 'del') { pinDigitado = pinDigitado.slice(0, -1); return desenharPin(); }
   if (pinDigitado.length >= 4) return;
   pinDigitado += k;
@@ -1183,7 +1318,7 @@ document.getElementById('formConfig').addEventListener('submit', e => {
 document.querySelectorAll('.modal').forEach(m => {
   m.addEventListener('click', e => {
     if (e.target !== m) return;
-    if (m.id === 'modalPin') fecharPin(); else fecharForm();
+    if (m.id === 'modalPin') fecharPin(true); else fecharForm();
   });
 });
 
@@ -1201,8 +1336,9 @@ document.addEventListener('visibilitychange', () => {
  *  Boot
  * ---------------------------------------------------------- */
 (function boot() {
-  // 1) desenha instantaneamente com o cache local
+  // 1) desenha instantaneamente com o cache local e abre a rota pedida no link
   renderTudo();
+  aplicarRota();
   // 2) sincroniza em segundo plano
   agendarFlush(300);
   atualizarDoServidor(true);

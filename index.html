@@ -42,7 +42,7 @@
         <span class="stat-icone" aria-hidden="true">🔥</span>
         <div>
           <strong id="statStreak">0</strong>
-          <small>dias seguidos</small>
+          <small id="statStreakLabel">dias seguidos</small>
         </div>
       </div>
     </div>
@@ -100,7 +100,8 @@
 
   <main>
     <section id="abaAprovacoes" class="aba ativa pad">
-      <h2>Aprovações pendentes</h2>
+      <div id="resumoPais" class="resumo"></div>
+      <h2 class="titulo-secao">Aprovações pendentes</h2>
       <div id="listaPendentes" class="pendentes"></div>
     </section>
 
@@ -146,6 +147,9 @@
         </label>
         <button class="btn-primario" type="submit">Salvar configurações</button>
       </form>
+      <button class="btn-perigo largo" id="btnEsquecerAparelho">🔒 Bloquear e esquecer este aparelho</button>
+      <p class="dica">Link direto para esta área: <code id="linkPais"></code>
+        <button class="btn-secundario" id="btnCopiarLink">Copiar</button></p>
     </section>
   </main>
 
@@ -166,6 +170,7 @@
       <span></span><span></span><span></span><span></span>
     </div>
     <p class="erro oculto" id="pinErro">PIN incorreto</p>
+    <label class="check-linha lembrar"><input type="checkbox" id="pinLembrar"> Manter conectado neste aparelho por 30 dias</label>
     <div class="teclado" id="tecladoPin">
       <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
       <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>

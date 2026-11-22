@@ -110,8 +110,28 @@ O indicador no topo mostra `🔄 Sincronizando (n)` ou `📴 Offline — salvo n
 
 ## Modo pais
 
-Toque no cadeado 🔒 no canto superior direito e digite o PIN. A área tem:
-fila de aprovações, CRUD de tarefas, CRUD de recompensas, painel de mesada (semana/mês) e configurações.
+Toque no cadeado 🔒 no canto superior direito e digite o PIN. A área abre num **painel-resumo**
+(tarefas de hoje, pontos, streak, quantos pedidos esperam você e a mesada da semana) seguido da
+fila de aprovações. As outras abas trazem CRUD de tarefas, CRUD de recompensas, mesada (semana/mês) e configurações.
+
+### Link direto para os pais
+
+Cada tela tem endereço próprio, então dá para salvar um atalho que já abre no painel:
+
+| link | abre em |
+|---|---|
+| `.../quadro-tarefas/#pais` | painel + aprovações |
+| `.../quadro-tarefas/#pais/tarefas` | CRUD de tarefas |
+| `.../quadro-tarefas/#pais/premios` | CRUD de recompensas |
+| `.../quadro-tarefas/#pais/mesada` | painel de mesada |
+| `.../quadro-tarefas/#loja` | lojinha (criança) |
+
+O link sempre pede o PIN. Marcando **“Manter conectado neste aparelho por 30 dias”** na tela do PIN,
+o celular dos pais passa a abrir direto — e o botão **“🔒 Bloquear e esquecer este aparelho”**,
+no fim das Configurações, desfaz isso na hora. O PWA também instala um atalho
+**“Área dos pais”** (segure o ícone do app na tela inicial).
+
+Essa “memória” fica só no aparelho (`localStorage`); use-a no seu celular, nunca no que a criança usa.
 
 > O PIN é uma trava **para evitar que a criança mexa**, não um sistema de segurança:
 > ele é validado no servidor e guardado no aparelho para funcionar offline.

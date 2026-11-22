@@ -396,3 +396,35 @@ input:focus, select:focus { outline: none; border-color: var(--roxo); }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ---------- painel-resumo dos pais ---------- */
+.resumo { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+.resumo .destaque { grid-column: 1 / -1; }
+.resumo-item {
+  background: var(--cartao); border: 1px solid var(--borda);
+  border-radius: 14px; padding: 12px;
+}
+.resumo-item strong { display: block; font-size: 1.45rem; font-weight: 800; line-height: 1.1; }
+.resumo-item small { font-size: .74rem; color: var(--texto-suave); }
+.resumo-item.alerta { border-color: var(--rosa); background: #fff1f5; }
+@media (prefers-color-scheme: dark) { .resumo-item.alerta { background: #3a1f2a; } }
+.resumo-item.alerta strong { color: var(--rosa); }
+.resumo .destaque {
+  background: linear-gradient(140deg, var(--roxo) 0%, var(--roxo-escuro) 100%);
+  color: #fff; border: 0; box-shadow: var(--sombra);
+}
+.resumo .destaque small { color: rgba(255, 255, 255, .85); }
+.resumo .destaque .linha { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
+.resumo .destaque .valor { font-size: 1.7rem; font-weight: 800; }
+.resumo-barra { height: 8px; background: rgba(255, 255, 255, .25); border-radius: 99px; overflow: hidden; margin-top: 8px; }
+.resumo-barra div { height: 100%; background: #ffd25c; border-radius: 99px; }
+
+.titulo-secao { font-size: 1.1rem; font-weight: 800; margin-bottom: 12px; }
+.btn-primario.largo, .btn-perigo.largo { width: 100%; padding: 13px 16px; margin-top: 14px; }
+.check-linha.lembrar { justify-content: center; margin-bottom: 14px; font-size: .82rem; }
+.dica { font-size: .78rem; color: var(--texto-suave); margin-top: 16px; }
+.dica code {
+  display: block; word-break: break-all; margin: 6px 0 8px;
+  background: var(--roxo-claro); color: var(--roxo);
+  padding: 8px 10px; border-radius: 10px; font-size: .78rem;
+}
