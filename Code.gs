@@ -33,8 +33,8 @@
  * ============================================================ */
 
 var ABAS = {
-  tarefas: ['id', 'titulo', 'icone', 'tipo', 'pontos', 'periodo', 'recorrencia', 'dias', 'precisa_aprova', 'conta_mesada', 'ativa', 'criada_em'],
-  registros: ['id', 'data', 'tarefa_id', 'status', 'pontos_ganhos', 'aprovado_em'],
+  tarefas: ['id', 'titulo', 'icone', 'tipo', 'pontos', 'periodo', 'recorrencia', 'dias', 'precisa_aprova', 'conta_mesada', 'ativa', 'criada_em', 'precisa_foto'],
+  registros: ['id', 'data', 'tarefa_id', 'status', 'pontos_ganhos', 'aprovado_em', 'foto_url'],
   recompensas: ['id', 'titulo', 'icone', 'custo_pontos', 'ativa'],
   config: ['chave', 'valor']
 };
@@ -48,6 +48,8 @@ var CONFIG_PADRAO = {
 };
 
 var PREFIXO_RESGATE = 'rec:';
+var PASTA_FOTOS = 'Fotos_Tarefas';
+var DIAS_RETENCAO_FOTOS = 30;
 var TZ = Session.getScriptTimeZone() || 'America/Sao_Paulo';
 
 /* ============================================================
@@ -69,14 +71,10 @@ function setupPlanilha() {
       sh = ss.insertSheet(nome);
       criadas.push(nome);
     }
-    var headers = ABAS[nome];
-    var primeira = sh.getRange(1, 1, 1, Math.max(headers.length, sh.getLastColumn() || 1)).getValues()[0];
-    var vazia = primeira.join('').toString().trim() === '';
-    if (vazia) {
-      sh.getRange(1, 1, 1, headers.length).setValues([headers]);
-      sh.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#efeafc');
-      sh.setFrozenRows(1);
-    }
+    // Cria os cabeçalhos quando a aba está vazia e acrescenta as colunas
+    // novas (precisa_foto, foto_url) quando a aba veio de uma versão anterior.
+    _colunasConferidas[nome] = false;
+    garantirColunas_(nome, sh);
   });
 
   // Config padrão (só preenche as chaves ausentes)
@@ -105,15 +103,15 @@ function setupPlanilha() {
     var shT = ss.getSheetByName('tarefas');
     var hoje = agoraISO_();
     [
-      ['Escovar os dentes', '🪥', 'basica', 0, 'manha', 'diaria', '', 'nao', 'sim', 'sim'],
-      ['Arrumar a cama', '🛏️', 'basica', 0, 'manha', 'diaria', '', 'nao', 'sim', 'sim'],
-      ['Fazer a lição de casa', '📚', 'basica', 0, 'tarde', 'semana', '', 'sim', 'sim', 'sim'],
-      ['Guardar os brinquedos', '🧸', 'basica', 0, 'noite', 'diaria', '', 'nao', 'sim', 'sim'],
-      ['Ajudar na louça', '🍽️', 'extra', 5, 'qualquer', 'diaria', '', 'sim', 'nao', 'sim'],
-      ['Ler 20 minutos', '📖', 'extra', 3, 'noite', 'diaria', '', 'nao', 'nao', 'sim'],
-      ['Regar as plantas', '🪴', 'extra', 2, 'qualquer', 'dias', '2,5', 'nao', 'nao', 'sim']
+      ['Escovar os dentes', '🪥', 'basica', 0, 'manha', 'diaria', '', 'nao', 'sim', 'sim', 'nao'],
+      ['Arrumar a cama', '🛏️', 'basica', 0, 'manha', 'diaria', '', 'nao', 'sim', 'sim', 'sim'],
+      ['Fazer a lição de casa', '📚', 'basica', 0, 'tarde', 'semana', '', 'sim', 'sim', 'sim', 'sim'],
+      ['Guardar os brinquedos', '🧸', 'basica', 0, 'noite', 'diaria', '', 'nao', 'sim', 'sim', 'nao'],
+      ['Ajudar na louça', '🍽️', 'extra', 5, 'qualquer', 'diaria', '', 'sim', 'nao', 'sim', 'sim'],
+      ['Ler 20 minutos', '📖', 'extra', 3, 'noite', 'diaria', '', 'nao', 'nao', 'sim', 'nao'],
+      ['Regar as plantas', '🪴', 'extra', 2, 'qualquer', 'dias', '2,5', 'nao', 'nao', 'sim', 'nao']
     ].forEach(function (t) {
-      shT.appendRow([novoId_(), t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9], hoje]);
+      shT.appendRow([novoId_(), t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9], hoje, t[10]]);
     });
   }
 
@@ -162,6 +160,7 @@ function executar_(acao, p) {
 
     /* ---------- criança ---------- */
     case 'concluir':        return apiConcluir_(p);
+    case 'enviar_foto':     return apiEnviarFoto_(p);
     case 'desfazer':        return apiDesfazer_(p);
     case 'resgatar':        return apiResgatar_(p);
 
@@ -175,6 +174,7 @@ function executar_(acao, p) {
     case 'excluir_recompensa': exigirPin_(p); return apiExcluir_('recompensas', p.id);
     case 'salvar_config':   exigirPin_(p); return apiSalvarConfig_(p);
     case 'setup':           exigirPin_(p); return { ok: true, msg: setupPlanilha() };
+    case 'limpar_fotos':    exigirPin_(p); return { ok: true, msg: limparFotosAntigas() };
     default:
       throw new Error('Ação desconhecida: ' + acao);
   }
@@ -241,7 +241,17 @@ function apiConcluir_(p) {
       if (r.id === id) return true;
       return r.tarefa_id === tarefaId && r.data === data && r.status !== 'rejeitada';
     })[0];
-    if (existente) return { ok: true, duplicado: true, registro: existente, saldo: calcularSaldo_(registros) };
+    if (existente) {
+      // Reenvio da fila: se a foto ainda não subiu, aproveita esta tentativa.
+      if (p.foto && !existente.foto_url) {
+        var urlNova = salvarFoto_(p.foto, tarefaId, data);
+        if (urlNova) {
+          atualizarPorId_('registros', existente.id, { foto_url: urlNova });
+          existente.foto_url = urlNova;
+        }
+      }
+      return { ok: true, duplicado: true, registro: existente, saldo: calcularSaldo_(registros) };
+    }
 
     var tarefa = lerTabela_('tarefas').map(normalizarTarefa_).filter(function (t) { return t.id === tarefaId; })[0];
     if (!tarefa) throw new Error('Tarefa não encontrada: ' + tarefaId);
@@ -254,12 +264,38 @@ function apiConcluir_(p) {
       tarefa_id: tarefaId,
       status: precisa ? 'pendente_aprovacao' : 'aprovada',
       pontos_ganhos: precisa ? 0 : pontos,
-      aprovado_em: precisa ? '' : agoraISO_()
+      aprovado_em: precisa ? '' : agoraISO_(),
+      foto_url: salvarFoto_(p.foto, tarefaId, data)
     };
     inserirLinha_('registros', novo);
 
     var todos = registros.concat([novo]);
     return { ok: true, registro: novo, saldo: calcularSaldo_(todos) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Sobe a foto de um registro que já existe (a fila do app envia a conclusão
+ * primeiro, para a interface responder na hora, e a imagem em seguida).
+ */
+function apiEnviarFoto_(p) {
+  var id = String(p.id || p.registro_id || '');
+  if (!id) throw new Error('id do registro obrigatório');
+  if (!p.foto) throw new Error('foto obrigatória');
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var reg = lerTabela_('registros').map(normalizarRegistro_).filter(function (r) { return r.id === id; })[0];
+    if (!reg) throw new Error('Registro não encontrado');
+    if (reg.foto_url) return { ok: true, duplicado: true, foto_url: reg.foto_url, registro: reg };
+
+    var url = salvarFoto_(p.foto, reg.tarefa_id, reg.data);
+    atualizarPorId_('registros', id, { foto_url: url });
+    reg.foto_url = url;
+    return { ok: true, foto_url: url, registro: reg };
   } finally {
     lock.releaseLock();
   }
@@ -367,7 +403,8 @@ function apiSalvarTarefa_(p) {
     precisa_aprova: simNao_(t.precisa_aprova),
     conta_mesada: simNao_(t.conta_mesada),
     ativa: simNao_(t.ativa === undefined ? 'sim' : t.ativa),
-    criada_em: t.criada_em || agoraISO_()
+    criada_em: t.criada_em || agoraISO_(),
+    precisa_foto: simNao_(t.precisa_foto)
   };
   if (!dados.titulo) throw new Error('Título obrigatório');
   if (dados.tipo === 'basica') dados.pontos = 0;
@@ -558,7 +595,8 @@ function ehResgate_(tarefaId) {
 function enriquecerRegistro_(r, tarefas, recompensas) {
   var out = {
     id: r.id, data: r.data, tarefa_id: r.tarefa_id,
-    status: r.status, pontos_ganhos: r.pontos_ganhos, aprovado_em: r.aprovado_em
+    status: r.status, pontos_ganhos: r.pontos_ganhos, aprovado_em: r.aprovado_em,
+    foto_url: r.foto_url || ''
   };
   if (ehResgate_(r.tarefa_id)) {
     var recId = String(r.tarefa_id).slice(PREFIXO_RESGATE.length);
@@ -574,8 +612,81 @@ function enriquecerRegistro_(r, tarefas, recompensas) {
     out.icone = t ? t.icone : '✅';
     out.pontos = t ? (t.tipo === 'extra' ? t.pontos : 0) : 0;
     out.tipo = t ? t.tipo : 'basica';
+    out.precisa_foto = t ? t.precisa_foto : 'nao';
   }
   return out;
+}
+
+/* ============================================================
+ *  FOTOS DE COMPROVAÇÃO (Google Drive)
+ *  A planilha guarda só a URL; a imagem fica na pasta Fotos_Tarefas.
+ * ============================================================ */
+
+/**
+ * Recebe a foto em Base64 (com ou sem o prefixo "data:image/jpeg;base64,"),
+ * grava um .jpg na pasta Fotos_Tarefas e devolve a URL de visualização direta.
+ * Devolve '' quando não vier foto — nunca derruba a conclusão da tarefa.
+ */
+function salvarFoto_(base64, tarefaId, data) {
+  if (!base64) return '';
+  try {
+    var limpo = String(base64).replace(/^data:image\/[a-zA-Z+]+;base64,/, '').replace(/\s+/g, '');
+    if (limpo.length < 32) return '';
+
+    var nome = (data || hojeISO_()) + '_' + String(tarefaId || 'tarefa').replace(/[^A-Za-z0-9_-]/g, '') + '.jpg';
+    var pasta = pastaFotos_();
+
+    // Reenvio da mesma tarefa no mesmo dia substitui a foto anterior.
+    var antigos = pasta.getFilesByName(nome);
+    while (antigos.hasNext()) antigos.next().setTrashed(true);
+
+    var arquivo = pasta.createFile(Utilities.newBlob(Utilities.base64Decode(limpo), 'image/jpeg', nome));
+    try {
+      arquivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {
+      // Contas com compartilhamento externo bloqueado: o link segue valendo
+      // para quem tem acesso ao Drive do dono.
+    }
+    return 'https://drive.google.com/thumbnail?id=' + arquivo.getId() + '&sz=w800';
+  } catch (err) {
+    return '';
+  }
+}
+
+function pastaFotos_() {
+  var it = DriveApp.getFoldersByName(PASTA_FOTOS);
+  while (it.hasNext()) {
+    var f = it.next();
+    if (!f.isTrashed()) return f;
+  }
+  return DriveApp.createFolder(PASTA_FOTOS);
+}
+
+/**
+ * Manutenção: manda para a lixeira as fotos com mais de DIAS_RETENCAO_FOTOS dias.
+ * Rode na mão de vez em quando ou use criarGatilhoLimpezaFotos() para automatizar.
+ */
+function limparFotosAntigas() {
+  var limite = new Date().getTime() - DIAS_RETENCAO_FOTOS * 24 * 60 * 60 * 1000;
+  var arquivos = pastaFotos_().getFiles();
+  var apagadas = 0, mantidas = 0;
+  while (arquivos.hasNext()) {
+    var a = arquivos.next();
+    if (a.getDateCreated().getTime() < limite) { a.setTrashed(true); apagadas++; }
+    else mantidas++;
+  }
+  return 'Fotos apagadas: ' + apagadas + ' · mantidas: ' + mantidas +
+         ' (retenção de ' + DIAS_RETENCAO_FOTOS + ' dias)';
+}
+
+/** Cria (uma única vez) o gatilho diário que roda limparFotosAntigas(). */
+function criarGatilhoLimpezaFotos() {
+  var existe = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'limparFotosAntigas';
+  });
+  if (existe) return 'O gatilho diário já existe.';
+  ScriptApp.newTrigger('limparFotosAntigas').timeBased().atHour(3).everyDays(1).create();
+  return 'Gatilho diário criado (roda por volta das 3h).';
 }
 
 /* ============================================================
@@ -596,6 +707,8 @@ function exigirPin_(p) {
  *  ACESSO À PLANILHA
  * ============================================================ */
 
+var _colunasConferidas = {};
+
 function aba_(nome) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(nome);
@@ -604,7 +717,31 @@ function aba_(nome) {
     sh = ss.getSheetByName(nome);
   }
   if (!sh) throw new Error('Aba não encontrada: ' + nome);
+  garantirColunas_(nome, sh);
   return sh;
+}
+
+/**
+ * Acrescenta ao final da aba qualquer coluna nova que o código espere
+ * (ex.: `precisa_foto`, `foto_url`), sem mexer nas colunas já existentes
+ * nem nos dados. Roda no máximo uma vez por execução, por aba.
+ */
+function garantirColunas_(nome, sh) {
+  if (_colunasConferidas[nome]) return;
+  _colunasConferidas[nome] = true;
+  var esperadas = ABAS[nome];
+  if (!esperadas) return;
+  var atuais = cabecalhos_(sh);
+  if (!atuais.length) {
+    sh.getRange(1, 1, 1, esperadas.length).setValues([esperadas])
+      .setFontWeight('bold').setBackground('#efeafc');
+    sh.setFrozenRows(1);
+    return;
+  }
+  var faltando = esperadas.filter(function (h) { return atuais.indexOf(h) < 0; });
+  if (!faltando.length) return;
+  sh.getRange(1, atuais.length + 1, 1, faltando.length).setValues([faltando])
+    .setFontWeight('bold').setBackground('#efeafc');
 }
 
 function cabecalhos_(sh) {
@@ -717,7 +854,8 @@ function normalizarTarefa_(r) {
     precisa_aprova: simNao_(r.precisa_aprova),
     conta_mesada: simNao_(r.conta_mesada),
     ativa: simNao_(r.ativa === undefined || r.ativa === '' ? 'sim' : r.ativa),
-    criada_em: String(r.criada_em || '')
+    criada_em: String(r.criada_em || ''),
+    precisa_foto: simNao_(r.precisa_foto)
   };
 }
 
@@ -738,7 +876,8 @@ function normalizarRegistro_(r) {
     tarefa_id: String(r.tarefa_id || '').trim(),
     status: String(r.status || 'aprovada').trim().toLowerCase(),
     pontos_ganhos: Number(String(r.pontos_ganhos || '0').replace(',', '.')) || 0,
-    aprovado_em: String(r.aprovado_em || '')
+    aprovado_em: String(r.aprovado_em || ''),
+    foto_url: String(r.foto_url || '')
   };
 }
 

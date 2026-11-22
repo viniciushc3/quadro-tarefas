@@ -132,6 +132,50 @@ function dinheiro(v) {
 }
 
 /* ------------------------------------------------------------
+ *  FOTO: compressão no navegador (canvas)
+ *  Reduz para no máximo 640px no maior lado e exporta JPEG 0.6,
+ *  o que costuma dar entre 25 KB e 60 KB por foto.
+ * ---------------------------------------------------------- */
+const FOTO_MAX_LADO = 640;
+const FOTO_QUALIDADE = 0.6;
+
+function comprimirImagem(arquivo) {
+  return new Promise((resolve, reject) => {
+    if (!arquivo || !/^image\//.test(arquivo.type || '')) return reject(new Error('Arquivo não é uma imagem'));
+    const url = URL.createObjectURL(arquivo);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const escala = Math.min(1, FOTO_MAX_LADO / Math.max(img.naturalWidth, img.naturalHeight));
+        const largura = Math.max(1, Math.round(img.naturalWidth * escala));
+        const altura = Math.max(1, Math.round(img.naturalHeight * escala));
+        const c = document.createElement('canvas');
+        c.width = largura;
+        c.height = altura;
+        const cx = c.getContext('2d');
+        cx.fillStyle = '#ffffff';            // JPEG não tem transparência
+        cx.fillRect(0, 0, largura, altura);
+        cx.drawImage(img, 0, 0, largura, altura);
+        const dataUrl = c.toDataURL('image/jpeg', FOTO_QUALIDADE);
+        URL.revokeObjectURL(url);
+        resolve({ dataUrl, largura, altura, bytes: Math.round((dataUrl.length - dataUrl.indexOf(',') - 1) * 0.75) });
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        reject(e);
+      }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Não deu para ler a imagem')); };
+    img.src = url;
+  });
+}
+
+function tamanhoLegivel(bytes) {
+  return bytes >= 1024 * 1024
+    ? (bytes / 1024 / 1024).toFixed(1) + ' MB'
+    : Math.max(1, Math.round(bytes / 1024)) + ' KB';
+}
+
+/* ------------------------------------------------------------
  *  API (CORS-safe)
  *   - GET  : querystring
  *   - POST : Content-Type text/plain  → requisição "simples", sem preflight
@@ -288,8 +332,13 @@ async function atualizarDoServidor(silencioso) {
     cache.config = d.config || cache.config;
     cache.tarefas = d.tarefas || [];
     cache.recompensas = d.recompensas || [];
+    const registrosLocais = cache.registros.filter(r => r._local && filaTem(r.id));
+    const pendentesLocais = cache.pendentes.filter(r => r._local && filaTem(r.id));
     cache.registros = d.registros_recentes || d.registros_hoje || [];
     cache.pendentes = d.pendentes || [];
+    // ainda não sincronizados (ex.: foto subindo): mantém a versão local
+    registrosLocais.forEach(r => { if (!cache.registros.some(x => x.id === r.id)) cache.registros.push(r); });
+    pendentesLocais.forEach(r => { if (!cache.pendentes.some(x => x.id === r.id)) cache.pendentes.unshift(r); });
     cache.saldo_servidor = Number(d.saldo) || 0;
     cache.atualizado_em = Date.now();
     persistirCache();
@@ -358,7 +407,7 @@ function streakAtual(iso) {
 /* ------------------------------------------------------------
  *  AÇÕES DA CRIANÇA (optimistic)
  * ---------------------------------------------------------- */
-function concluirTarefa(tarefa, elemento) {
+function concluirTarefa(tarefa, elemento, foto) {
   const hoje = hojeISO();
   if (registroDaTarefa(tarefa.id, hoje)) return;
 
@@ -373,27 +422,87 @@ function concluirTarefa(tarefa, elemento) {
     status: precisa ? 'pendente_aprovacao' : 'aprovada',
     pontos_ganhos: precisa ? 0 : pontos,
     aprovado_em: precisa ? '' : new Date().toISOString(),
+    foto_url: foto || '',          // prévia local até o upload terminar
+    _foto_local: !!foto,
     _local: true
   };
   cache.registros.push(registro);
   if (precisa) {
     cache.pendentes.unshift(Object.assign({}, registro, {
-      kind: 'tarefa', titulo: tarefa.titulo, icone: tarefa.icone, tipo: tarefa.tipo, pontos
+      kind: 'tarefa', titulo: tarefa.titulo, icone: tarefa.icone, tipo: tarefa.tipo,
+      pontos, precisa_foto: tarefa.precisa_foto
     }));
   }
   persistirCache();
 
-  enfileirar('concluir', { id, tarefa_id: tarefa.id, data: hoje }, precisa ? 0 : pontos);
+  const payload = { id, tarefa_id: tarefa.id, data: hoje };
+  if (foto) payload.foto = foto;
+  enfileirar('concluir', payload, precisa ? 0 : pontos);
 
   renderCrianca();
   vibrar(18);
   if (precisa) {
-    toast('👏 Enviado para aprovação!');
+    toast(foto ? '📸 Foto enviada para aprovação!' : '👏 Enviado para aprovação!');
   } else {
     confete(elemento);
     animarSaldo();
     toast(pontos > 0 ? ('🎉 +' + pontos + ' pontos!') : '🎉 Muito bem!');
   }
+}
+
+/* Fluxo da foto: abre a câmera, comprime, mostra a prévia e só então conclui. */
+let fotoPendente = null;   // { tarefa, elemento, dataUrl, bytes, largura, altura }
+
+function pedirFoto(tarefa, elemento) {
+  fotoPendente = { tarefa, elemento, dataUrl: null };
+  const input = document.getElementById('inputFoto');
+  input.value = '';
+  input.click();
+}
+
+async function aoEscolherFoto(arquivo) {
+  if (!arquivo || !fotoPendente) return;
+  toast('🗜️ Preparando a foto...');
+  try {
+    const r = await comprimirImagem(arquivo);
+    fotoPendente.dataUrl = r.dataUrl;
+    fotoPendente.bytes = r.bytes;
+    document.getElementById('previaImg').src = r.dataUrl;
+    document.getElementById('previaTarefa').textContent =
+      (fotoPendente.tarefa.icone || '') + ' ' + fotoPendente.tarefa.titulo;
+    document.getElementById('previaInfo').textContent =
+      r.largura + '×' + r.altura + ' · ' + tamanhoLegivel(r.bytes);
+    document.getElementById('modalPrevia').classList.remove('oculto');
+  } catch (e) {
+    toast('😕 Não deu para usar essa foto');
+    fotoPendente = null;
+  }
+}
+
+function fecharPrevia() {
+  document.getElementById('modalPrevia').classList.add('oculto');
+  document.getElementById('previaImg').removeAttribute('src');
+  fotoPendente = null;
+}
+
+function enviarComprovacao() {
+  if (!fotoPendente || !fotoPendente.dataUrl) return;
+  const { tarefa, elemento, dataUrl } = fotoPendente;
+  document.getElementById('modalPrevia').classList.add('oculto');
+  document.getElementById('previaImg').removeAttribute('src');
+  fotoPendente = null;
+  concluirTarefa(tarefa, elemento, dataUrl);   // UI responde na hora; upload vai na fila
+}
+
+function ampliarFoto(url) {
+  if (!url) return;
+  document.getElementById('fotoGrandeImg').src = url;
+  document.getElementById('modalFoto').classList.remove('oculto');
+}
+
+function fecharFotoGrande() {
+  document.getElementById('modalFoto').classList.add('oculto');
+  document.getElementById('fotoGrandeImg').removeAttribute('src');
 }
 
 function desfazerTarefa(tarefa) {
@@ -612,23 +721,38 @@ function cartaoTarefa(t, hoje) {
 
   const metas = [];
   if (t.tipo === 'extra' && t.pontos > 0) metas.push('<span class="pts">+' + t.pontos + ' pts</span>');
+  if (t.precisa_foto === 'sim') metas.push('<span class="camera" title="Precisa de foto">📷 foto</span>');
   if (t.precisa_aprova === 'sim') metas.push('precisa de autorização');
   if (reg && reg.status === 'pendente_aprovacao') metas.push('aguardando aprovação');
   if (reg && reg.status === 'rejeitada') metas.push('não foi aprovada');
+
+  const foto = reg && reg.foto_url ? reg.foto_url : '';
 
   btn.innerHTML =
     '<span class="icone" aria-hidden="true">' + escapar(t.icone || '⭐') + '</span>' +
     '<span class="corpo">' +
       '<span class="titulo">' + escapar(t.titulo) + '</span>' +
-      '<span class="meta">' + metas.join(' · ') + '</span>' +
+      '<span class="meta">' + metas.map(m => m.indexOf('<span') === 0 ? m : '<span>' + m + '</span>').join('') + '</span>' +
     '</span>' +
+    (foto ? '<img class="miniatura" src="' + escapar(foto) + '" alt="Foto" loading="lazy">' : '') +
     '<span class="marca" aria-hidden="true">' + marca + '</span>';
 
   btn.setAttribute('aria-label', t.titulo + (reg ? ' — concluída' : ''));
+
+  const mini = btn.querySelector('.miniatura');
+  if (mini) mini.addEventListener('click', ev => { ev.stopPropagation(); ampliarFoto(foto); });
+
   btn.addEventListener('click', () => {
-    if (!reg) concluirTarefa(t, btn);
-    else if (reg.status === 'rejeitada') { cache.registros = cache.registros.filter(r => r.id !== reg.id); persistirCache(); renderCrianca(); }
-    else desfazerTarefa(t);
+    if (!reg) {
+      if (t.precisa_foto === 'sim') pedirFoto(t, btn);
+      else concluirTarefa(t, btn);
+    } else if (reg.status === 'rejeitada') {
+      cache.registros = cache.registros.filter(r => r.id !== reg.id);
+      persistirCache();
+      renderCrianca();
+    } else {
+      desfazerTarefa(t);
+    }
   });
   return btn;
 }
@@ -690,6 +814,7 @@ function renderLoja(hoje) {
 function renderPais() {
   renderResumoPais();
   renderPendentes();
+  renderHistoricoFotos();
   renderCrudTarefas();
   renderCrudRecompensas();
   renderMesada();
@@ -744,20 +869,60 @@ function renderPendentes() {
     const detalhe = p.kind === 'resgate'
       ? 'Resgate · ' + (p.custo_pontos || 0) + ' pontos'
       : 'Tarefa · ' + (p.pontos ? '+' + p.pontos + ' pontos' : 'sem pontos');
+    const semFoto = p.precisa_foto === 'sim' && !p.foto_url;
     div.innerHTML =
       '<div class="cartao-linha">' +
-        '<span class="icone" aria-hidden="true">' + escapar(p.icone || '✅') + '</span>' +
+        (p.foto_url
+          ? '<img class="miniatura" src="' + escapar(p.foto_url) + '" alt="Foto" loading="lazy">'
+          : (semFoto ? '<span class="sem-foto" aria-hidden="true">⏳</span>'
+                     : '<span class="icone" aria-hidden="true">' + escapar(p.icone || '✅') + '</span>')) +
         '<span class="corpo">' +
           '<span class="titulo">' + escapar(p.titulo) + '</span>' +
-          '<span class="meta">' + detalhe + ' · ' + dataCurta(p.data) + '</span>' +
+          '<span class="meta">' + detalhe + ' · ' + dataCurta(p.data) +
+          (p.foto_url ? ' · toque na foto para ampliar' : (semFoto ? ' · foto subindo...' : '')) + '</span>' +
         '</span>' +
       '</div>' +
       '<div class="cartao-acoes">' +
         '<button class="btn-primario pequeno" data-ok="1">Aprovar</button>' +
         '<button class="btn-perigo" data-no="1">Recusar</button>' +
       '</div>';
+    const mini = div.querySelector('.miniatura');
+    if (mini) mini.addEventListener('click', () => ampliarFoto(p.foto_url));
     div.querySelector('[data-ok]').addEventListener('click', () => decidir(p.id, true));
     div.querySelector('[data-no]').addEventListener('click', () => decidir(p.id, false));
+    alvo.appendChild(div);
+  });
+}
+
+/** Fotos já decididas nos últimos 10 dias, para conferência depois. */
+function renderHistoricoFotos() {
+  const alvo = document.getElementById('listaHistorico');
+  const titulo = document.getElementById('tituloHistorico');
+  if (!alvo) return;
+  const desde = somarDias(hojeISO(), -10);
+  const itens = cache.registros
+    .filter(r => r.foto_url && r.data >= desde && r.status !== 'pendente_aprovacao')
+    .sort((a, b) => (a.data < b.data ? 1 : -1))
+    .slice(0, 12);
+
+  titulo.classList.toggle('oculto', itens.length === 0);
+  alvo.innerHTML = '';
+  if (!itens.length) return;
+
+  itens.forEach(r => {
+    const t = cache.tarefas.filter(x => x.id === r.tarefa_id)[0];
+    const div = document.createElement('div');
+    div.className = 'cartao';
+    div.innerHTML =
+      '<div class="cartao-linha">' +
+        '<img class="miniatura" src="' + escapar(r.foto_url) + '" alt="Foto" loading="lazy">' +
+        '<span class="corpo">' +
+          '<span class="titulo">' + escapar(t ? t.titulo : 'Tarefa removida') + '</span>' +
+          '<span class="meta">' + dataCurta(r.data) + ' · ' +
+          (r.status === 'aprovada' ? '✅ aprovada' : '🚫 recusada') + '</span>' +
+        '</span>' +
+      '</div>';
+    div.querySelector('.miniatura').addEventListener('click', () => ampliarFoto(r.foto_url));
     alvo.appendChild(div);
   });
 }
@@ -789,6 +954,7 @@ function renderCrudTarefas() {
       (PERIODOS.filter(p => p.id === t.periodo)[0] || { rotulo: t.periodo }).rotulo,
       descricaoRecorrencia(t),
       t.precisa_aprova === 'sim' ? 'aprova' : null,
+      t.precisa_foto === 'sim' ? '📷 foto' : null,
       t.conta_mesada === 'sim' ? 'mesada' : null,
       t.ativa === 'sim' ? null : 'inativa'
     ].filter(Boolean).join(' · ');
@@ -907,7 +1073,7 @@ function abrirFormTarefa(t) {
   t = t || {
     id: uid(), titulo: '', icone: '⭐', tipo: 'basica', pontos: 0,
     periodo: 'manha', recorrencia: 'diaria', dias: '',
-    precisa_aprova: 'nao', conta_mesada: 'sim', ativa: 'sim'
+    precisa_aprova: 'nao', conta_mesada: 'sim', ativa: 'sim', precisa_foto: 'nao'
   };
   document.getElementById('formTitulo').textContent = nova ? 'Nova tarefa' : 'Editar tarefa';
   const f = document.getElementById('formEdicao');
@@ -937,6 +1103,10 @@ function abrirFormTarefa(t) {
         (String(t.dias || '').split(/[^0-9]+/).includes(String(i)) ? ' checked' : '') + '> ' + d + '</label>').join('') +
       '</span>' +
     '</label>' +
+    '<label>Exigir foto?<select name="precisa_foto">' +
+      opt('nao', 'Não precisa de foto', t.precisa_foto === 'sim' ? 'sim' : 'nao') +
+      opt('sim', '📷 Sim — abrir a câmera', t.precisa_foto === 'sim' ? 'sim' : 'nao') +
+    '</select></label>' +
     '<label class="check-linha"><input type="checkbox" name="precisa_aprova"' + (t.precisa_aprova === 'sim' ? ' checked' : '') + '> Precisa de aprovação dos pais</label>' +
     '<label class="check-linha"><input type="checkbox" name="conta_mesada"' + (t.conta_mesada === 'sim' ? ' checked' : '') + '> Conta para a mesada</label>' +
     '<label class="check-linha"><input type="checkbox" name="ativa"' + (t.ativa === 'sim' ? ' checked' : '') + '> Tarefa ativa</label>' +
@@ -964,6 +1134,7 @@ function abrirFormTarefa(t) {
       recorrencia: f.recorrencia.value,
       dias: f.recorrencia.value === 'dias' ? dias : '',
       precisa_aprova: f.precisa_aprova.checked ? 'sim' : 'nao',
+      precisa_foto: f.precisa_foto.value === 'sim' ? 'sim' : 'nao',
       conta_mesada: f.conta_mesada.checked ? 'sim' : 'nao',
       ativa: f.ativa.checked ? 'sim' : 'nao',
       criada_em: t.criada_em || new Date().toISOString()
@@ -1315,12 +1486,50 @@ document.getElementById('formConfig').addEventListener('submit', e => {
   salvarConfig(itens);
 });
 
+document.getElementById('inputFoto').addEventListener('change', e => {
+  const arquivo = e.target.files && e.target.files[0];
+  if (arquivo) aoEscolherFoto(arquivo);
+  e.target.value = '';
+});
+
+document.getElementById('btnEnviarFoto').addEventListener('click', enviarComprovacao);
+document.getElementById('btnCancelarFoto').addEventListener('click', fecharPrevia);
+document.getElementById('btnFecharFoto').addEventListener('click', fecharFotoGrande);
+
+document.getElementById('btnTirarOutra').addEventListener('click', () => {
+  if (!fotoPendente) return fecharPrevia();
+  document.getElementById('modalPrevia').classList.add('oculto');
+  const input = document.getElementById('inputFoto');
+  input.value = '';
+  input.click();
+});
+
 document.querySelectorAll('.modal').forEach(m => {
   m.addEventListener('click', e => {
     if (e.target !== m) return;
-    if (m.id === 'modalPin') fecharPin(true); else fecharForm();
+    if (m.id === 'modalPin') fecharPin(true);
+    else if (m.id === 'modalPrevia') fecharPrevia();
+    else if (m.id === 'modalFoto') fecharFotoGrande();
+    else fecharForm();
   });
 });
+
+/* Foto que não carrega (sem internet, link do Drive sem permissão) vira
+   um espaço neutro em vez do ícone de imagem quebrada do navegador. */
+document.addEventListener('error', e => {
+  const el = e.target;
+  if (!el || el.tagName !== 'IMG') return;
+  if (el.classList.contains('miniatura')) {
+    const vazio = document.createElement('span');
+    vazio.className = 'sem-foto';
+    vazio.textContent = '🖼️';
+    vazio.title = 'Não deu para carregar a foto';
+    el.replaceWith(vazio);
+  } else if (el.id === 'fotoGrandeImg') {
+    fecharFotoGrande();
+    toast('😕 Não deu para carregar a foto');
+  }
+}, true);
 
 window.addEventListener('online', () => { atualizarStatusSync(); agendarFlush(300); });
 window.addEventListener('offline', atualizarStatusSync);

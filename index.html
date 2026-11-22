@@ -103,6 +103,8 @@
       <div id="resumoPais" class="resumo"></div>
       <h2 class="titulo-secao">Aprovações pendentes</h2>
       <div id="listaPendentes" class="pendentes"></div>
+      <h3 class="sub" id="tituloHistorico">Comprovações recentes</h3>
+      <div id="listaHistorico" class="historico"></div>
     </section>
 
     <section id="abaCrudTarefas" class="aba pad">
@@ -187,6 +189,30 @@
   <div class="modal-caixa alto">
     <h2 id="formTitulo">Tarefa</h2>
     <form id="formEdicao"></form>
+  </div>
+</div>
+
+<!-- ============ FOTO DE COMPROVAÇÃO ============ -->
+<input type="file" id="inputFoto" accept="image/*" capture="environment" hidden>
+
+<div class="modal oculto" id="modalPrevia" role="dialog" aria-modal="true" aria-labelledby="previaTitulo">
+  <div class="modal-caixa">
+    <h2 id="previaTitulo">Sua foto ficou assim?</h2>
+    <p class="modal-sub" id="previaTarefa"></p>
+    <img id="previaImg" class="previa-img" alt="Prévia da foto de comprovação">
+    <p class="previa-info" id="previaInfo"></p>
+    <div class="form-acoes">
+      <button type="button" class="btn-secundario" id="btnTirarOutra">Tirar outra</button>
+      <button type="button" class="btn-primario" id="btnEnviarFoto">Enviar comprovação</button>
+    </div>
+    <button type="button" class="btn-texto" id="btnCancelarFoto">Cancelar</button>
+  </div>
+</div>
+
+<div class="modal oculto" id="modalFoto" role="dialog" aria-modal="true" aria-label="Foto ampliada">
+  <div class="foto-grande">
+    <img id="fotoGrandeImg" alt="Foto de comprovação">
+    <button type="button" class="btn-primario" id="btnFecharFoto">Fechar</button>
   </div>
 </div>
 

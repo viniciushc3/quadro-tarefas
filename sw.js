@@ -1,6 +1,6 @@
 /* Service Worker — cache do "shell" do app (PWA offline).
    Troque a versão para forçar atualização nos aparelhos. */
-const VERSAO = 'quadrinho-v2';
+const VERSAO = 'quadrinho-v3';
 const ARQUIVOS = [
   './',
   './index.html',

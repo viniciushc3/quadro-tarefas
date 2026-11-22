@@ -82,14 +82,14 @@ O indicador no topo mostra `🔄 Sincronizando (n)` ou `📴 Offline — salvo n
 
 ## Estrutura das abas
 
-**`tarefas`** — `id | titulo | icone | tipo | pontos | periodo | recorrencia | dias | precisa_aprova | conta_mesada | ativa | criada_em`
+**`tarefas`** — `id | titulo | icone | tipo | pontos | periodo | recorrencia | dias | precisa_aprova | conta_mesada | ativa | criada_em | precisa_foto`
 
 - `tipo`: `basica` (obrigação, 0 pontos) · `extra` (gera pontos)
 - `periodo`: `manha` · `tarde` · `noite` · `qualquer`
 - `recorrencia`: `diaria` · `semana` (seg–sex) · `fimdesemana` (sáb–dom) · `dias` (usa a coluna `dias`, ex.: `1,3,5`, com 0=Dom e 6=Sáb)
-- `precisa_aprova`, `conta_mesada`, `ativa`: `sim` / `nao`
+- `precisa_aprova`, `conta_mesada`, `ativa`, `precisa_foto`: `sim` / `nao`
 
-**`registros`** — `id | data | tarefa_id | status | pontos_ganhos | aprovado_em`
+**`registros`** — `id | data | tarefa_id | status | pontos_ganhos | aprovado_em | foto_url`
 `status`: `pendente_aprovacao` · `aprovada` · `rejeitada`
 
 **`recompensas`** — `id | titulo | icone | custo_pontos | ativa`
@@ -99,6 +99,33 @@ O indicador no topo mostra `🔄 Sincronizando (n)` ou `📴 Offline — salvo n
 > **Resgates da lojinha** também vivem na aba `registros`, com `tarefa_id = "rec:<id_da_recompensa>"`
 > e `pontos_ganhos` negativo — assim o sistema mantém exatamente as 4 abas e o extrato de pontos
 > fica todo num lugar só. Os pontos saem do saldo já no pedido (ficam reservados) e voltam se os pais recusarem.
+
+## Foto de comprovação
+
+Marque **Exigir foto? → Sim** na tarefa (área dos pais) e ela passa a pedir uma foto para ser concluída.
+
+Como funciona:
+
+1. A criança toca na tarefa (que mostra o selo **📷 foto**) e o celular abre direto a câmera traseira.
+2. O navegador **comprime a imagem num `<canvas>`**: no máximo **640 px** no maior lado, JPEG qualidade **0.6**
+   — na prática entre 25 KB e 60 KB (uma foto de 2400×1600 e 332 KB vira 640×427 e 24 KB).
+3. Aparece a prévia com **Enviar comprovação** / **Tirar outra**.
+4. Ao enviar, a tarefa **já fica concluída na tela** com a prévia local, e o upload vai para a fila de sincronização.
+5. O `Code.gs` recebe o Base64, salva o `.jpg` na pasta **`Fotos_Tarefas`** do seu Google Drive
+   (nome `AAAA-MM-DD_tarefaId.jpg`, compartilhado como “qualquer pessoa com o link pode ver”)
+   e grava **só a URL** na coluna `foto_url`. **Base64 nunca vai para a célula da planilha.**
+6. Na área dos pais, a fila de aprovações e o bloco **Comprovações recentes** mostram a miniatura;
+   toque nela para ampliar antes de Aprovar ou Recusar.
+
+### Limpeza automática
+
+A função **`limparFotosAntigas()`** manda para a lixeira as fotos com mais de 30 dias
+(constante `DIAS_RETENCAO_FOTOS` no topo do `Code.gs`). Rode na mão quando quiser, ou execute uma vez
+**`criarGatilhoLimpezaFotos()`** para criar o gatilho diário que faz isso sozinho de madrugada.
+
+> ⚠️ **Ao atualizar o `Code.gs`, rode `setupPlanilha()` de novo.** Isso acrescenta as colunas
+> `precisa_foto` e `foto_url` ao fim das abas existentes (sem tocar nos dados) e pede a nova
+> autorização de acesso ao Google Drive. Depois publique **Nova versão** da implantação.
 
 ## Regras de cálculo
 
