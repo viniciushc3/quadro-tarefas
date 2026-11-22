@@ -123,6 +123,33 @@ A função **`limparFotosAntigas()`** manda para a lixeira as fotos com mais de 
 (constante `DIAS_RETENCAO_FOTOS` no topo do `Code.gs`). Rode na mão quando quiser, ou execute uma vez
 **`criarGatilhoLimpezaFotos()`** para criar o gatilho diário que faz isso sozinho de madrugada.
 
+### “Não tem permissão para chamar DriveApp” e o Google não pede autorização
+
+O editor só pede os escopos declarados no manifesto. Se o `appsscript.json` do projeto não listar o
+Drive, a tela de permissões nunca aparece e o `DriveApp` falha para sempre. Para resolver:
+
+1. No Apps Script: **⚙ Configurações do projeto** → marque **“Mostrar o arquivo de manifesto
+   `appsscript.json` no editor”**.
+2. Abra o `appsscript.json` que apareceu na lista de arquivos e deixe o bloco `oauthScopes` assim
+   (há uma cópia pronta em `appsscript.json` neste repositório — **mantenha o seu `timeZone` atual**):
+
+   ```json
+   "oauthScopes": [
+     "https://www.googleapis.com/auth/spreadsheets",
+     "https://www.googleapis.com/auth/drive",
+     "https://www.googleapis.com/auth/script.scriptapp"
+   ]
+   ```
+
+   Se preferir, apague o `oauthScopes` inteiro: sem ele, o Apps Script deduz os escopos do código.
+3. Salve, rode **`testarDrive`** e **agora** a tela de permissões aparece → *Revisar permissões →
+   Avançado → Acessar o projeto (não seguro) → Permitir*.
+4. Rode `testarDrive` de novo (deve dizer **TUDO CERTO**) e publique **Nova versão** da implantação.
+
+Se mesmo assim não pedir, revogue o acesso em
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions) (procure o nome do
+projeto do Apps Script) e rode `testarDrive` outra vez.
+
 ### Se a foto não aparecer na aprovação
 
 Rode **`testarDrive()`** no editor do Apps Script (menu de funções → Executar). Ele diz em português
