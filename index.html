@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6d4bd8">
+<meta name="description" content="Quadro de tarefas, recompensas e mesada">
+<title>Meu Quadrinho</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ TELA DA CRIANÇA ============ -->
+<div id="appCrianca" class="tela">
+
+  <header class="topo">
+    <div class="topo-linha">
+      <div class="saudacao">
+        <span class="ola" id="saudacaoTexto">Oi!</span>
+        <h1 id="nomeCrianca">...</h1>
+      </div>
+      <button class="btn-pais" id="btnAbrirPais" aria-label="Área dos pais">
+        <span aria-hidden="true">🔒</span>
+      </button>
+    </div>
+
+    <div class="cards-topo">
+      <div class="card-stat pontos">
+        <span class="stat-icone" aria-hidden="true">⭐</span>
+        <div>
+          <strong id="statSaldo">0</strong>
+          <small>pontos</small>
+        </div>
+      </div>
+      <div class="card-stat streak">
+        <span class="stat-icone" aria-hidden="true">🔥</span>
+        <div>
+          <strong id="statStreak">0</strong>
+          <small>dias seguidos</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="progresso-bloco">
+      <div class="progresso-rotulo">
+        <span>Tarefas de hoje</span>
+        <span id="progressoTexto">0 / 0</span>
+      </div>
+      <div class="barra" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="barraProgresso">
+        <div class="barra-fill" id="barraFill"></div>
+      </div>
+      <p class="progresso-msg" id="progressoMsg">Vamos começar!</p>
+    </div>
+  </header>
+
+  <main>
+    <!-- Aba Tarefas -->
+    <section id="abaTarefas" class="aba ativa">
+      <div id="listaTarefas" class="grupos"></div>
+    </section>
+
+    <!-- Aba Lojinha -->
+    <section id="abaLoja" class="aba">
+      <div class="loja-cabecalho">
+        <h2>Lojinha</h2>
+        <p>Você tem <strong id="lojaSaldo">0</strong> pontos para gastar</p>
+      </div>
+      <div id="listaRecompensas" class="recompensas"></div>
+      <h3 class="sub">Meus pedidos</h3>
+      <div id="listaMeusPedidos" class="pedidos"></div>
+    </section>
+  </main>
+
+  <nav class="tabbar" id="tabbarCrianca">
+    <button class="tab ativa" data-aba="abaTarefas"><span aria-hidden="true">✅</span>Tarefas</button>
+    <button class="tab" data-aba="abaLoja"><span aria-hidden="true">🎁</span>Lojinha</button>
+  </nav>
+</div>
+
+<!-- ============ TELA DOS PAIS ============ -->
+<div id="appPais" class="tela oculto">
+
+  <header class="topo topo-pais">
+    <div class="topo-linha">
+      <div class="saudacao">
+        <span class="ola">Área dos pais</span>
+        <h1 id="tituloPais">Painel</h1>
+      </div>
+      <button class="btn-pais" id="btnSairPais" aria-label="Voltar para a criança">
+        <span aria-hidden="true">✕</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section id="abaAprovacoes" class="aba ativa pad">
+      <h2>Aprovações pendentes</h2>
+      <div id="listaPendentes" class="pendentes"></div>
+    </section>
+
+    <section id="abaCrudTarefas" class="aba pad">
+      <div class="linha-titulo">
+        <h2>Tarefas</h2>
+        <button class="btn-primario pequeno" id="btnNovaTarefa">+ Nova</button>
+      </div>
+      <div id="listaCrudTarefas" class="crud-lista"></div>
+    </section>
+
+    <section id="abaCrudRecompensas" class="aba pad">
+      <div class="linha-titulo">
+        <h2>Recompensas</h2>
+        <button class="btn-primario pequeno" id="btnNovaRecompensa">+ Nova</button>
+      </div>
+      <div id="listaCrudRecompensas" class="crud-lista"></div>
+    </section>
+
+    <section id="abaMesada" class="aba pad">
+      <div class="linha-titulo">
+        <h2>Mesada</h2>
+        <div class="seg" id="segPeriodo">
+          <button class="seg-btn ativa" data-periodo="semana">Semana</button>
+          <button class="seg-btn" data-periodo="mes">Mês</button>
+        </div>
+      </div>
+      <div id="painelMesada" class="mesada"></div>
+
+      <h3 class="sub">Configurações</h3>
+      <form id="formConfig" class="form-config">
+        <label>Nome da criança
+          <input type="text" name="nome_crianca" autocomplete="off">
+        </label>
+        <label>Mesada base (R$ / mês)
+          <input type="number" name="valor_mesada_base" step="0.01" min="0" inputmode="decimal">
+        </label>
+        <label>Valor por ponto extra (R$)
+          <input type="number" name="valor_por_ponto" step="0.01" min="0" inputmode="decimal">
+        </label>
+        <label>Novo PIN (4 dígitos — deixe vazio para manter)
+          <input type="text" name="pin_pais" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="off">
+        </label>
+        <button class="btn-primario" type="submit">Salvar configurações</button>
+      </form>
+    </section>
+  </main>
+
+  <nav class="tabbar" id="tabbarPais">
+    <button class="tab ativa" data-aba="abaAprovacoes"><span aria-hidden="true">🔔</span>Aprovar<span class="badge oculto" id="badgePendentes">0</span></button>
+    <button class="tab" data-aba="abaCrudTarefas"><span aria-hidden="true">📋</span>Tarefas</button>
+    <button class="tab" data-aba="abaCrudRecompensas"><span aria-hidden="true">🎁</span>Prêmios</button>
+    <button class="tab" data-aba="abaMesada"><span aria-hidden="true">💰</span>Mesada</button>
+  </nav>
+</div>
+
+<!-- ============ MODAL PIN ============ -->
+<div class="modal oculto" id="modalPin" role="dialog" aria-modal="true" aria-labelledby="pinTitulo">
+  <div class="modal-caixa">
+    <h2 id="pinTitulo">PIN dos pais</h2>
+    <p class="modal-sub">Digite os 4 dígitos</p>
+    <div class="pin-pontos" id="pinPontos" aria-hidden="true">
+      <span></span><span></span><span></span><span></span>
+    </div>
+    <p class="erro oculto" id="pinErro">PIN incorreto</p>
+    <div class="teclado" id="tecladoPin">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button data-k="cancel" class="aux">Sair</button>
+      <button data-k="0">0</button>
+      <button data-k="del" class="aux">⌫</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL FORMULÁRIO (tarefa / recompensa) ============ -->
+<div class="modal oculto" id="modalForm" role="dialog" aria-modal="true" aria-labelledby="formTitulo">
+  <div class="modal-caixa alto">
+    <h2 id="formTitulo">Tarefa</h2>
+    <form id="formEdicao"></form>
+  </div>
+</div>
+
+<canvas id="confete" aria-hidden="true"></canvas>
+<div id="toast" class="toast oculto" role="status" aria-live="polite"></div>
+<div id="statusSync" class="status-sync" title="Status da sincronização"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
