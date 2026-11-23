@@ -36,7 +36,10 @@ var ABAS = {
   tarefas: ['id', 'titulo', 'icone', 'tipo', 'pontos', 'periodo', 'recorrencia', 'dias', 'precisa_aprova', 'conta_mesada', 'ativa', 'criada_em', 'precisa_foto'],
   registros: ['id', 'data', 'tarefa_id', 'status', 'pontos_ganhos', 'aprovado_em', 'foto_url'],
   recompensas: ['id', 'titulo', 'icone', 'custo_pontos', 'ativa'],
-  config: ['chave', 'valor']
+  config: ['chave', 'valor'],
+  extrato: ['id', 'data', 'tipo', 'descricao', 'valor'],
+  sonhos: ['id', 'titulo', 'icone', 'tipo_meta', 'valor_alvo', 'concluido'],
+  pausas: ['data', 'motivo']
 };
 
 var CONFIG_PADRAO = {
@@ -49,7 +52,14 @@ var CONFIG_PADRAO = {
   email_relatorio: '',
   valor_semanada_base: '12.50',
   modo_desconto: 'fixo',          // 'fixo' | 'proporcional' | 'nenhum'
-  valor_desconto_falta: '1.00'
+  valor_desconto_falta: '1.00',
+  // Gamificação
+  escudos_streak: '0',
+  escudos_usados_em: '',          // datas já protegidas por escudo, separadas por vírgula
+  escudos_semana_creditada: '',   // segunda-feira da última semana perfeita já premiada
+  avatar_crianca: '🦊',
+  tema_app: 'lilas',
+  bonus_poupanca_pct: '10'
 };
 
 var PREFIXO_RESGATE = 'rec:';
@@ -168,6 +178,14 @@ function executar_(acao, p) {
     case 'enviar_foto':     return apiEnviarFoto_(p);
     case 'desfazer':        return apiDesfazer_(p);
     case 'resgatar':        return apiResgatar_(p);
+    case 'salvar_sonho':    return apiSalvarSonho_(p);
+    case 'excluir_sonho':   return apiExcluirSonho_(p);
+    case 'salvar_personalizacao':
+      gravarConfig_({
+        avatar_crianca: String(p.avatar_crianca || '🦊').slice(0, 8),
+        tema_app: String(p.tema_app || 'lilas').slice(0, 24)
+      });
+      return { ok: true, config: configPublica_(lerConfig_()) };
 
     /* ---------- pais (exigem PIN) ---------- */
     case 'verificar_pin':   return { ok: true, valido: pinValido_(p.pin) };
@@ -182,6 +200,12 @@ function executar_(acao, p) {
     case 'limpar_fotos':    exigirPin_(p); return { ok: true, msg: limparFotosAntigas() };
     case 'testar_drive':    exigirPin_(p); return { ok: true, msg: testarDrive() };
     case 'enviar_relatorio_semanal': exigirPin_(p); return apiEnviarRelatorio_(p);
+    case 'lancar_extrato':  exigirPin_(p); return apiLancarExtrato_(p);
+    case 'excluir_extrato': exigirPin_(p); return apiExcluirExtrato_(p);
+    case 'fechar_semanada': exigirPin_(p); return apiFecharSemanada_(p);
+    case 'bonus_poupanca':  exigirPin_(p); return apiBonusPoupanca_(p);
+    case 'salvar_pausa':    exigirPin_(p); return apiSalvarPausa_(p);
+    case 'excluir_pausa':   exigirPin_(p); return apiExcluirPausa_(p);
     case 'previa_relatorio_semanal': exigirPin_(p);
       return { ok: true, relatorio: calcularRelatorioSemanal_(p.de, p.ate) };
     default:
@@ -212,6 +236,12 @@ function apiBootstrap_(p) {
   var tarefas = lerTabela_('tarefas').map(normalizarTarefa_);
   var recompensas = lerTabela_('recompensas').map(normalizarRecompensa_);
   var registros = lerTabela_('registros').map(normalizarRegistro_);
+  var extrato = lerExtrato_();
+  var sonhos = lerSonhos_();
+  var pausas = lerPausas_();
+  var escudos = processarEscudos_(tarefas, registros, cfg, hoje, pausas);
+  var streak = calcularStreak_(tarefas, registros, hoje, { pausas: pausas, escudados: escudos.escudados });
+  var cofre = saldoCofre_(extrato);
 
   var pendentes = registros
     .filter(function (r) { return r.status === 'pendente_aprovacao'; })
@@ -228,7 +258,15 @@ function apiBootstrap_(p) {
     registros_recentes: registros.filter(function (r) { return r.data >= somarDias_(hoje, -45); }),
     pendentes: pendentes,
     saldo: calcularSaldo_(registros),
-    streak: calcularStreak_(tarefas, registros, hoje),
+    streak: streak,
+    escudos: escudos.escudos,
+    escudos_usados: Object.keys(escudos.escudados).sort().slice(-30),
+    ganhou_escudo: escudos.ganhou_escudo,
+    extrato: extrato.filter(function (m) { return m.data >= somarDias_(hoje, -120); }),
+    saldo_cofre: cofre,
+    sonhos: sonhos,
+    pausas: pausas,
+    medalhas: calcularMedalhas_(tarefas, registros, hoje, cofre, streak, pausas),
     servidor_em: agoraISO_()
   };
 }
@@ -408,7 +446,7 @@ function apiSalvarTarefa_(p) {
     tipo: t.tipo === 'extra' ? 'extra' : 'basica',
     pontos: Number(t.pontos) || 0,
     periodo: ['manha', 'tarde', 'noite', 'qualquer'].indexOf(t.periodo) >= 0 ? t.periodo : 'qualquer',
-    recorrencia: ['diaria', 'semana', 'fimdesemana', 'dias'].indexOf(t.recorrencia) >= 0 ? t.recorrencia : 'diaria',
+    recorrencia: ['diaria', 'semana', 'fimdesemana', 'dias', 'unica'].indexOf(t.recorrencia) >= 0 ? t.recorrencia : 'diaria',
     dias: String(t.dias || ''),
     precisa_aprova: simNao_(t.precisa_aprova),
     conta_mesada: simNao_(t.conta_mesada),
@@ -451,7 +489,11 @@ function apiExcluir_(aba, id) {
 }
 
 function apiSalvarConfig_(p) {
-  var itens = p.config || p.itens || {};
+  gravarConfig_(p.config || p.itens || {});
+  return { ok: true, config: configPublica_(lerConfig_()) };
+}
+
+function gravarConfig_(itens) {
   var sh = aba_('config');
   var dados = lerTabela_('config');
   Object.keys(itens).forEach(function (chave) {
@@ -463,7 +505,6 @@ function apiSalvarConfig_(p) {
     if (idx >= 0) sh.getRange(idx + 2, 2).setValue(valor);
     else { sh.appendRow([chave, valor]); dados.push({ chave: chave, valor: valor }); }
   });
-  return { ok: true, config: configPublica_(lerConfig_()) };
 }
 
 /**
@@ -493,11 +534,16 @@ function apiResumoMesada_(p) {
   var esperadas = 0, feitas = 0, pontosExtra = 0, extrasFeitas = 0;
   var porDia = [];
 
+  var pausas = lerPausas_();
   var dia = de;
   var guard = 0;
   while (dia <= ate && guard++ < 400) {
-    var dow2 = parseISO_(dia).getDay();
-    var doDia = tarefas.filter(function (t) { return t.ativa === 'sim' && tarefaNoDia_(t, dow2); });
+    if (pausas[dia]) {                      // férias/doença: dia neutro
+      porDia.push({ data: dia, esperadas: 0, feitas: 0, pct: null, pausa: pausas[dia] });
+      dia = somarDias_(dia, 1);
+      continue;
+    }
+    var doDia = tarefasDoDia_(tarefas, dia);
     var basicasMesada = doDia.filter(function (t) { return t.tipo === 'basica' && t.conta_mesada === 'sim'; });
     var regsDia = registros.filter(function (r) { return r.data === dia && r.status === 'aprovada'; });
     var idsFeitos = {};
@@ -550,15 +596,25 @@ function apiResumoMesada_(p) {
  *  REGRAS DE NEGÓCIO
  * ============================================================ */
 
-function tarefaNoDia_(t, dow) {
+/**
+ * `iso` só é necessário para a recorrência `unica` (Missão Relâmpago),
+ * em que a coluna `dias` guarda a data exata AAAA-MM-DD.
+ */
+function tarefaNoDia_(t, dow, iso) {
   switch (t.recorrencia) {
     case 'diaria': return true;
     case 'semana': return dow >= 1 && dow <= 5;
     case 'fimdesemana': return dow === 0 || dow === 6;
+    case 'unica': return !!iso && String(t.dias || '').trim() === iso;
     case 'dias':
       return String(t.dias || '').split(/[^0-9]+/).filter(String).map(Number).indexOf(dow) >= 0;
     default: return true;
   }
+}
+
+function tarefasDoDia_(tarefas, iso) {
+  var dow = parseISO_(iso).getDay();
+  return tarefas.filter(function (t) { return t.ativa === 'sim' && tarefaNoDia_(t, dow, iso); });
 }
 
 function calcularSaldo_(registros) {
@@ -570,32 +626,135 @@ function calcularSaldo_(registros) {
   return s;
 }
 
-/** Dias consecutivos (até hoje/ontem) em que todas as básicas do dia foram feitas. */
-function calcularStreak_(tarefas, registros, hoje) {
-  var feitosPorDia = {};
-  registros.forEach(function (r) {
-    if (r.status === 'rejeitada' || ehResgate_(r.tarefa_id)) return;
-    (feitosPorDia[r.data] = feitosPorDia[r.data] || {})[r.tarefa_id] = true;
-  });
+/**
+ * Dias consecutivos (até hoje/ontem) com todas as básicas do dia feitas.
+ * Dias pausados (férias/doença) e dias protegidos por escudo não quebram
+ * a sequência — eles são pulados, sem somar ponto.
+ *
+ * `opcoes.pausas`   : { 'AAAA-MM-DD': 'motivo' }
+ * `opcoes.escudados`: { 'AAAA-MM-DD': true }
+ */
+function calcularStreak_(tarefas, registros, hoje, opcoes) {
+  opcoes = opcoes || {};
+  var pausas = opcoes.pausas || {};
+  var escudados = opcoes.escudados || {};
+  var feitosPorDia = mapaFeitosPorDia_(registros);
 
-  function diaCompleto(dia) {
-    var dow = parseISO_(dia).getDay();
-    var basicas = tarefas.filter(function (t) {
-      return t.ativa === 'sim' && t.tipo === 'basica' && tarefaNoDia_(t, dow);
-    });
-    if (!basicas.length) return false;
-    var feitos = feitosPorDia[dia] || {};
-    return basicas.every(function (t) { return feitos[t.id]; });
-  }
+  function completo(dia) { return diaBasicasCompletas_(tarefas, feitosPorDia, dia); }
 
   var streak = 0;
-  var cursor = diaCompleto(hoje) ? hoje : somarDias_(hoje, -1);
+  var cursor = completo(hoje) ? hoje : somarDias_(hoje, -1);
   var guard = 0;
-  while (guard++ < 400 && diaCompleto(cursor)) {
+  while (guard++ < 400) {
+    if (pausas[cursor] || escudados[cursor]) { cursor = somarDias_(cursor, -1); continue; }
+    if (!completo(cursor)) break;
     streak++;
     cursor = somarDias_(cursor, -1);
   }
   return streak;
+}
+
+function mapaFeitosPorDia_(registros) {
+  var m = {};
+  registros.forEach(function (r) {
+    if (r.status === 'rejeitada' || ehResgate_(r.tarefa_id)) return;
+    (m[r.data] = m[r.data] || {})[r.tarefa_id] = true;
+  });
+  return m;
+}
+
+/** Todas as básicas previstas para o dia foram feitas? (false se não havia nenhuma) */
+function diaBasicasCompletas_(tarefas, feitosPorDia, dia) {
+  var basicas = tarefasDoDia_(tarefas, dia).filter(function (t) { return t.tipo === 'basica'; });
+  if (!basicas.length) return false;
+  var feitos = feitosPorDia[dia] || {};
+  return basicas.every(function (t) { return feitos[t.id]; });
+}
+
+/* ============================================================
+ *  PAUSAS (férias / doença)
+ * ============================================================ */
+
+function lerPausas_() {
+  var m = {};
+  lerTabela_('pausas').forEach(function (r) {
+    var d = normalizarData_(r.data);
+    if (d) m[d] = String(r.motivo || 'Pausa');
+  });
+  return m;
+}
+
+/* ============================================================
+ *  ESCUDOS DE SEQUÊNCIA (streak freeze)
+ * ============================================================ */
+
+function listaEscudados_(cfg) {
+  var m = {};
+  String(cfg.escudos_usados_em || '').split(',').forEach(function (d) {
+    d = d.trim();
+    if (d) m[d] = true;
+  });
+  return m;
+}
+
+/**
+ * Roda no bootstrap: credita +1 escudo por semana perfeita (uma vez por semana)
+ * e gasta um escudo para proteger o primeiro dia falho anterior a hoje.
+ * Devolve o estado atualizado sem exigir nenhuma ação do app.
+ */
+function processarEscudos_(tarefas, registros, cfg, hoje, pausas) {
+  var escudos = Math.max(0, parseInt(cfg.escudos_streak, 10) || 0);
+  var escudados = listaEscudados_(cfg);
+  var feitosPorDia = mapaFeitosPorDia_(registros);
+  var mudou = false;
+  var ganhou = false;
+
+  // 1) semana fechada anterior 100% completa => +1 escudo (uma vez só)
+  var semana = semanaFechadaAnterior_(hoje);
+  if (String(cfg.escudos_semana_creditada || '') !== semana.de) {
+    var perfeita = true, teveDia = false;
+    var d = semana.de, g = 0;
+    while (d <= semana.ate && g++ < 10) {
+      if (!pausas[d]) {
+        var basicas = tarefasDoDia_(tarefas, d).filter(function (t) { return t.tipo === 'basica'; });
+        if (basicas.length) {
+          teveDia = true;
+          if (!diaBasicasCompletas_(tarefas, feitosPorDia, d)) { perfeita = false; break; }
+        }
+      }
+      d = somarDias_(d, 1);
+    }
+    if (teveDia && perfeita) { escudos++; ganhou = true; }
+    cfg.escudos_semana_creditada = semana.de;
+    mudou = true;
+  }
+
+  // 2) protege o dia falho mais recente (nunca o dia de hoje, que ainda está em aberto)
+  if (escudos > 0) {
+    var cursor = somarDias_(hoje, -1);
+    var limite = 0;
+    while (limite++ < 14) {
+      if (pausas[cursor] || escudados[cursor]) { cursor = somarDias_(cursor, -1); continue; }
+      var temBasicas = tarefasDoDia_(tarefas, cursor).filter(function (t) { return t.tipo === 'basica'; }).length;
+      if (!temBasicas) { cursor = somarDias_(cursor, -1); continue; }
+      if (diaBasicasCompletas_(tarefas, feitosPorDia, cursor)) break;   // sequência intacta
+      escudados[cursor] = true;
+      escudos--;
+      cfg.escudos_usados_em = Object.keys(escudados).sort().slice(-60).join(',');
+      mudou = true;
+      break;
+    }
+  }
+
+  cfg.escudos_streak = String(escudos);
+  if (mudou) {
+    gravarConfig_({
+      escudos_streak: cfg.escudos_streak,
+      escudos_usados_em: cfg.escudos_usados_em || '',
+      escudos_semana_creditada: cfg.escudos_semana_creditada || ''
+    });
+  }
+  return { escudos: escudos, escudados: escudados, ganhou_escudo: ganhou };
 }
 
 function ehResgate_(tarefaId) {
@@ -830,11 +989,17 @@ function calcularRelatorioSemanal_(de, ate) {
   var feitasLista = [];       // { titulo, icone, vezes }
   var contagemFeitas = {};
 
+  var pausas = lerPausas_();
+  var diasPausados = [];
   var dia = de, guarda = 0;
   while (dia <= ate && guarda++ < 60) {
-    var dow = parseISO_(dia).getDay();
-    var doDia = tarefas.filter(function (t) {
-      return t.ativa === 'sim' && t.tipo === 'basica' && t.conta_mesada === 'sim' && tarefaNoDia_(t, dow);
+    if (pausas[dia]) {                      // dia pausado não gera falta nem desconto
+      diasPausados.push({ data: dia, motivo: pausas[dia] });
+      dia = somarDias_(dia, 1);
+      continue;
+    }
+    var doDia = tarefasDoDia_(tarefas, dia).filter(function (t) {
+      return t.tipo === 'basica' && t.conta_mesada === 'sim';
     });
     var aprovadasDoDia = {};
     registros.forEach(function (r) {
@@ -921,6 +1086,7 @@ function calcularRelatorioSemanal_(de, ate) {
       faltas: faltas,
       feitas_lista: feitasLista
     },
+    pausas: diasPausados,
     extras: {
       quantidade: extras.length,
       lista: extras,
@@ -1041,6 +1207,17 @@ function montarHtmlRelatorio_(r, assunto) {
         (r.basicas.faltas.length ? '⚠️ Faltaram ' + r.basicas.faltas.length : '🎉 Sem faltas') + '</h3>' +
         linhasFaltas()) +
 
+      (r.pausas && r.pausas.length
+        ? bloco('🏖️ Dias pausados',
+            '<p style="margin:0;color:' + cinza + ';font-size:14px">Estes dias não contaram como falta:</p>' +
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:15px;margin-top:8px">' +
+            r.pausas.map(function (x) {
+              return '<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">' + escaparHtml_(x.motivo) + '</td>' +
+                '<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;color:' + cinza + '">' +
+                diaSemanaBR_(x.data) + ', ' + dataBR_(x.data) + '</td></tr>';
+            }).join('') + '</table>')
+        : '') +
+
       bloco('⭐ Extras e pontos',
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:15px;margin-bottom:12px">' +
           '<tr><td style="padding:4px 0">Extras concluídas</td><td style="padding:4px 0;text-align:right;font-weight:bold">' + r.extras.quantidade + '</td></tr>' +
@@ -1079,6 +1256,10 @@ function montarTextoRelatorio_(r) {
     l.push('Nenhuma falta na semana.');
   }
   l.push('');
+  if (r.pausas && r.pausas.length) {
+    l.push('Dias pausados (sem falta): ' + r.pausas.map(function (x) { return dataBR_(x.data) + ' ' + x.motivo; }).join(', '));
+    l.push('');
+  }
   l.push('EXTRAS: ' + r.extras.quantidade + ' concluída(s), +' + r.extras.pontos_ganhos + ' pontos');
   r.extras.lista.forEach(function (e) { l.push('  - ' + e.titulo + ' (' + dataBR_(e.data) + ') +' + e.pontos); });
   l.push('Pontos gastos na lojinha: ' + r.extras.pontos_gastos);
@@ -1120,6 +1301,260 @@ function escaparHtml_(s) {
   return String(s === undefined || s === null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+
+/* ============================================================
+ *  COFRINHO VIRTUAL (aba `extrato`)
+ * ============================================================ */
+
+function lerExtrato_() {
+  return lerTabela_('extrato').map(function (r) {
+    return {
+      id: String(r.id).trim(),
+      data: normalizarData_(r.data),
+      tipo: String(r.tipo || 'entrada').trim().toLowerCase(),
+      descricao: String(r.descricao || ''),
+      valor: Number(String(r.valor || '0').replace('R$', '').replace(/\s/g, '').replace(',', '.')) || 0
+    };
+  });
+}
+
+function saldoCofre_(extrato) {
+  var s = 0;
+  (extrato || lerExtrato_()).forEach(function (m) {
+    s += (m.tipo === 'saida') ? -Math.abs(m.valor) : Math.abs(m.valor);
+  });
+  return arred2_(s);
+}
+
+function apiLancarExtrato_(p) {
+  var tipo = String(p.tipo || 'entrada').trim().toLowerCase();
+  if (['entrada', 'saida', 'rendimento'].indexOf(tipo) < 0) throw new Error('Tipo inválido: ' + tipo);
+  var valor = Math.abs(Number(String(p.valor).replace(',', '.')) || 0);
+  if (!valor) throw new Error('Informe um valor maior que zero');
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var extrato = lerExtrato_();
+    var id = p.id || novoId_();
+    var jaExiste = extrato.filter(function (m) { return m.id === id; })[0];
+    if (jaExiste) return { ok: true, duplicado: true, saldo_cofre: saldoCofre_(extrato), extrato: extrato };
+
+    if (tipo === 'saida' && valor > saldoCofre_(extrato) + 0.001) throw new Error('Saldo do cofrinho insuficiente');
+
+    var mov = {
+      id: id,
+      data: p.data || hojeISO_(),
+      tipo: tipo,
+      descricao: String(p.descricao || (tipo === 'entrada' ? 'Depósito' : tipo === 'saida' ? 'Retirada' : 'Rendimento')),
+      valor: arred2_(valor)
+    };
+    inserirLinha_('extrato', mov);
+    var novo = extrato.concat([mov]);
+    return { ok: true, movimento: mov, saldo_cofre: saldoCofre_(novo), extrato: novo };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function apiExcluirExtrato_(p) {
+  if (!p.id) throw new Error('id obrigatório');
+  excluirPorId_('extrato', String(p.id));
+  var extrato = lerExtrato_();
+  return { ok: true, excluido: String(p.id), saldo_cofre: saldoCofre_(extrato), extrato: extrato };
+}
+
+/** Fecha a semanada da semana informada (ou da última semana fechada) no cofrinho. */
+function apiFecharSemanada_(p) {
+  var periodo = (p.de && p.ate) ? { de: p.de, ate: p.ate } : semanaFechadaAnterior_(hojeISO_());
+  var r = calcularRelatorioSemanal_(periodo.de, periodo.ate);
+  var descricao = 'Semanada ' + dataBR_(r.de) + ' a ' + dataBR_(r.ate);
+
+  var extrato = lerExtrato_();
+  var repetido = extrato.filter(function (m) { return m.descricao === descricao; })[0];
+  if (repetido) {
+    return { ok: true, duplicado: true, msg: 'Essa semana já foi lançada no cofrinho.',
+             movimento: repetido, saldo_cofre: saldoCofre_(extrato), relatorio: r, extrato: extrato };
+  }
+  if (r.semanada.a_pagar <= 0) {
+    return { ok: true, nada_a_pagar: true, msg: 'A semanada dessa semana ficou em R$ 0,00.',
+             saldo_cofre: saldoCofre_(extrato), relatorio: r, extrato: extrato };
+  }
+
+  var res = apiLancarExtrato_({
+    id: p.id, tipo: 'entrada', valor: r.semanada.a_pagar,
+    descricao: descricao, data: p.data || hojeISO_()
+  });
+  res.relatorio = r;
+  res.msg = 'Semanada de ' + dinheiroBR_(r.semanada.a_pagar) + ' guardada no cofrinho.';
+  return res;
+}
+
+/** Bônus de poupança: credita um rendimento percentual sobre o saldo guardado. */
+function apiBonusPoupanca_(p) {
+  var cfg = lerConfig_();
+  var pct = Number(String(p.pct || cfg.bonus_poupanca_pct || '10').replace(',', '.')) || 10;
+  var extrato = lerExtrato_();
+  var saldo = saldoCofre_(extrato);
+  if (saldo <= 0) throw new Error('O cofrinho está vazio — não há sobre o que render.');
+
+  var valor = arred2_(saldo * pct / 100);
+  if (valor <= 0) throw new Error('O rendimento ficaria em R$ 0,00.');
+
+  var res = apiLancarExtrato_({
+    id: p.id, tipo: 'rendimento', valor: valor,
+    descricao: 'Bônus de poupança (' + pct + '% de ' + dinheiroBR_(saldo) + ')',
+    data: p.data || hojeISO_()
+  });
+  res.msg = 'Rendimento de ' + dinheiroBR_(valor) + ' creditado.';
+  return res;
+}
+
+/* ============================================================
+ *  SONHOS (metas visuais)
+ * ============================================================ */
+
+function lerSonhos_() {
+  return lerTabela_('sonhos').map(function (r) {
+    return {
+      id: String(r.id).trim(),
+      titulo: String(r.titulo || '').trim(),
+      icone: String(r.icone || '🌟').trim(),
+      tipo_meta: String(r.tipo_meta || 'dinheiro').trim().toLowerCase() === 'pontos' ? 'pontos' : 'dinheiro',
+      valor_alvo: Number(String(r.valor_alvo || '0').replace(',', '.')) || 0,
+      concluido: simNao_(r.concluido)
+    };
+  });
+}
+
+function apiSalvarSonho_(p) {
+  var s = p.sonho || p;
+  var dados = {
+    id: s.id || novoId_(),
+    titulo: String(s.titulo || '').trim(),
+    icone: String(s.icone || '🌟').trim(),
+    tipo_meta: String(s.tipo_meta).trim().toLowerCase() === 'pontos' ? 'pontos' : 'dinheiro',
+    valor_alvo: Math.abs(Number(String(s.valor_alvo).replace(',', '.')) || 0),
+    concluido: simNao_(s.concluido)
+  };
+  if (!dados.titulo) throw new Error('Dê um nome para o sonho');
+  if (!dados.valor_alvo) throw new Error('Informe quanto falta juntar');
+
+  var existe = lerTabela_('sonhos').some(function (x) { return String(x.id) === dados.id; });
+  if (existe) atualizarPorId_('sonhos', dados.id, dados);
+  else inserirLinha_('sonhos', dados);
+  return { ok: true, sonho: dados, sonhos: lerSonhos_() };
+}
+
+function apiExcluirSonho_(p) {
+  if (!p.id) throw new Error('id obrigatório');
+  excluirPorId_('sonhos', String(p.id));
+  return { ok: true, excluido: String(p.id), sonhos: lerSonhos_() };
+}
+
+/* ============================================================
+ *  PAUSAS (modo férias / doença)
+ * ============================================================ */
+
+function apiSalvarPausa_(p) {
+  var de = String(p.de || p.data || '').trim();
+  var ate = String(p.ate || de).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) throw new Error('Datas inválidas');
+  if (ate < de) { var t = de; de = ate; ate = t; }
+
+  var motivo = String(p.motivo || 'Pausa').trim();
+  var existentes = lerPausas_();
+  var sh = aba_('pausas');
+  var criadas = 0, dia = de, guarda = 0;
+  while (dia <= ate && guarda++ < 90) {
+    if (!existentes[dia]) { sh.appendRow([dia, motivo]); criadas++; }
+    dia = somarDias_(dia, 1);
+  }
+  if (guarda >= 90) throw new Error('Período muito longo (máximo 90 dias)');
+  return { ok: true, criadas: criadas, pausas: lerPausas_() };
+}
+
+function apiExcluirPausa_(p) {
+  var de = String(p.de || p.data || '').trim();
+  var ate = String(p.ate || de).trim();
+  if (!de) throw new Error('data obrigatória');
+  var sh = aba_('pausas');
+  var linhas = lerTabela_('pausas');
+  for (var i = linhas.length - 1; i >= 0; i--) {
+    var d = normalizarData_(linhas[i].data);
+    if (d >= de && d <= ate) sh.deleteRow(i + 2);
+  }
+  return { ok: true, pausas: lerPausas_() };
+}
+
+/* ============================================================
+ *  MEDALHAS (conquistas)
+ * ============================================================ */
+
+function calcularMedalhas_(tarefas, registros, hoje, saldoCofre, streak, pausas) {
+  var feitosPorDia = mapaFeitosPorDia_(registros);
+  var metaPoupanca = 20;
+
+  // Semana perfeita: alguma das últimas 8 semanas fechadas com 100%
+  var semanasPerfeitas = 0;
+  var ref = semanaFechadaAnterior_(hoje);
+  for (var w = 0; w < 8; w++) {
+    var de = somarDias_(ref.de, -7 * w);
+    var ate = somarDias_(ref.ate, -7 * w);
+    var teve = false, perfeita = true, d = de, g = 0;
+    while (d <= ate && g++ < 10) {
+      if (!pausas[d]) {
+        var basicas = tarefasDoDia_(tarefas, d).filter(function (t) { return t.tipo === 'basica'; });
+        if (basicas.length) {
+          teve = true;
+          if (!diaBasicasCompletas_(tarefas, feitosPorDia, d)) { perfeita = false; break; }
+        }
+      }
+      d = somarDias_(d, 1);
+    }
+    if (teve && perfeita) semanasPerfeitas++;
+  }
+
+  // Madrugadora: maior sequência de dias com todas as tarefas da manhã feitas
+  var melhorManha = 0, atualManha = 0;
+  for (var i = 60; i >= 0; i--) {
+    var dia = somarDias_(hoje, -i);
+    var manha = tarefasDoDia_(tarefas, dia).filter(function (t) { return t.periodo === 'manha'; });
+    if (pausas[dia]) continue;
+    if (!manha.length) continue;
+    var feitosDia = feitosPorDia[dia] || {};
+    var todas = manha.every(function (t) { return feitosDia[t.id]; });
+    if (todas) { atualManha++; melhorManha = Math.max(melhorManha, atualManha); }
+    else atualManha = 0;
+  }
+
+  // Mão na massa: total de extras aprovadas
+  var porId = {};
+  tarefas.forEach(function (t) { porId[t.id] = t; });
+  var extrasFeitas = registros.filter(function (r) {
+    if (r.status !== 'aprovada' || ehResgate_(r.tarefa_id)) return false;
+    var t = porId[r.tarefa_id];
+    return t ? t.tipo === 'extra' : r.pontos_ganhos > 0;
+  }).length;
+
+  function medalha(id, icone, titulo, descricao, valor, meta) {
+    return {
+      id: id, icone: icone, titulo: titulo, descricao: descricao,
+      valor: valor, meta: meta,
+      desbloqueada: valor >= meta,
+      progresso: Math.max(0, Math.min(1, meta ? valor / meta : 0))
+    };
+  }
+
+  return [
+    medalha('semana_perfeita', '🏆', 'Semana Perfeita', '100% das obrigatórias numa semana', semanasPerfeitas, 1),
+    medalha('madrugadora', '🌅', 'Madrugadora', '5 dias seguidos com tudo da manhã feito', melhorManha, 5),
+    medalha('mao_na_massa', '💪', 'Mão na Massa', '10 tarefas extras concluídas', extrasFeitas, 10),
+    medalha('poupadora', '🐷', 'Poupadora', 'Juntar ' + dinheiroBR_(metaPoupanca) + ' no cofrinho', arred2_(Math.max(0, saldoCofre)), metaPoupanca),
+    medalha('invicta', '🔥', 'Invicta', '7 dias seguidos de sequência', streak, 7)
+  ];
 }
 
 /* ============================================================
@@ -1195,7 +1630,8 @@ function lerTabela_(nome) {
     if (row.join('').trim() === '') return;
     var obj = {};
     headers.forEach(function (h, i) { if (h) obj[h] = row[i]; });
-    if (String(obj.id || obj.chave || '').trim() === '') return;
+    var chavePrimaria = headers[0];
+    if (String(obj[chavePrimaria] === undefined ? '' : obj[chavePrimaria]).trim() === '') return;
     out.push(obj);
   });
   return out;

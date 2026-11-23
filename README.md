@@ -6,7 +6,7 @@ O app responde **instantaneamente** (Optimistic UI + cache em `localStorage` +
 fila de sincronização em segundo plano): marcar uma tarefa nunca espera o Google Sheets.
 
 ```
-index.html · style.css · app.js · manifest.json · sw.js · icons/ · Code.gs
+index.html · style.css · app.js · sounds.js · manifest.json · sw.js · icons/ · Code.gs · appsscript.json
 ```
 
 ---
@@ -86,7 +86,7 @@ O indicador no topo mostra `🔄 Sincronizando (n)` ou `📴 Offline — salvo n
 
 - `tipo`: `basica` (obrigação, 0 pontos) · `extra` (gera pontos)
 - `periodo`: `manha` · `tarde` · `noite` · `qualquer`
-- `recorrencia`: `diaria` · `semana` (seg–sex) · `fimdesemana` (sáb–dom) · `dias` (usa a coluna `dias`, ex.: `1,3,5`, com 0=Dom e 6=Sáb)
+- `recorrencia`: `diaria` · `semana` (seg–sex) · `fimdesemana` (sáb–dom) · `dias` (usa a coluna `dias`, ex.: `1,3,5`, com 0=Dom e 6=Sáb) · `unica` (Missão Relâmpago: a coluna `dias` guarda a data exata `AAAA-MM-DD`)
 - `precisa_aprova`, `conta_mesada`, `ativa`, `precisa_foto`: `sim` / `nao`
 
 **`registros`** — `id | data | tarefa_id | status | pontos_ganhos | aprovado_em | foto_url`
@@ -95,6 +95,12 @@ O indicador no topo mostra `🔄 Sincronizando (n)` ou `📴 Offline — salvo n
 **`recompensas`** — `id | titulo | icone | custo_pontos | ativa`
 
 **`config`** — `chave | valor`
+
+**`extrato`** (cofrinho) — `id | data | tipo | descricao | valor` · `tipo`: `entrada` · `saida` · `rendimento`
+
+**`sonhos`** (metas) — `id | titulo | icone | tipo_meta | valor_alvo | concluido` · `tipo_meta`: `dinheiro` ou `pontos`
+
+**`pausas`** (férias/doença) — `data | motivo` · uma linha por dia, data em `AAAA-MM-DD`
 
 > **Resgates da lojinha** também vivem na aba `registros`, com `tarefa_id = "rec:<id_da_recompensa>"`
 > e `pontos_ganhos` negativo — assim o sistema mantém exatamente as 4 abas e o extrato de pontos
@@ -160,9 +166,10 @@ executar a função, aceitar a tela de permissões e publicar **Nova versão** d
 Quando o servidor recebe a tarefa mas não consegue guardar a imagem, a tarefa **não se perde**: ela
 é concluída normalmente e a área dos pais mostra o aviso *“Fotos não estão sendo salvas”* com o motivo.
 
-> ⚠️ **Ao atualizar o `Code.gs`, rode `setupPlanilha()` de novo.** Isso acrescenta as colunas
-> `precisa_foto` e `foto_url` ao fim das abas existentes (sem tocar nos dados) e pede a nova
-> autorização de acesso ao Google Drive. Depois publique **Nova versão** da implantação.
+> ⚠️ **Sempre que atualizar o `Code.gs`, rode `setupPlanilha()` de novo** e publique
+> **Nova versão** da implantação. A função cria o que faltar — colunas (`precisa_foto`, `foto_url`)
+> e abas (`extrato`, `sonhos`, `pausas`) — sempre no fim e sem tocar nos dados existentes.
+> Confira também os escopos em `appsscript.json` (planilha, Drive, gatilhos e envio de e-mail).
 
 ## Relatório semanal por e-mail
 
@@ -194,6 +201,58 @@ O desconto nunca passa do valor base — a semanada não fica negativa.
 > O envio usa `MailApp`, que exige o escopo `script.send_mail` no `appsscript.json`
 > (já incluído no arquivo deste repositório). Contas gratuitas do Gmail enviam até 100 e-mails por dia,
 > de sobra para um relatório semanal.
+
+## Som e vibração
+
+`sounds.js` sintetiza os sons com a Web Audio API — sem MP3, então funciona offline, responde na hora
+e não pesa no cache. Cada som sai junto com um padrão de vibração (`navigator.vibrate`); em aparelhos
+sem vibração, como iPhone, só o som toca, sem erro nenhum.
+
+| momento | som | vibração |
+|---|---|---|
+| tarefa que conta para a mesada | moeda | `[40,30,40]` |
+| tarefa que não conta | plim curto | `[30]` |
+| tarefa que precisa de aprovação | 2 notas subindo | `[25,40,25]` |
+| pais aprovam | acorde maior | `[50,40,80]` |
+| pais recusam | 2 tons descendo | `[80]` |
+| meta batida (dia 100%, medalha nova, resgate, sonho) | fanfarra | `[60,40,60,40,120]` |
+
+O botão 🔊/🔇 fica no cabeçalho e a escolha é salva no aparelho. Quem usa “reduzir movimento” no
+sistema recebe só o som, sem vibração.
+
+## Gamificação
+
+- **Cofrinho de sonhos** — na aba **Eu**, metas em reais (saldo do cofrinho) ou em pontos, com barra
+  de progresso automática. Ao bater a meta, toca a fanfarra.
+- **Estante de medalhas** — Semana Perfeita, Madrugadora (5 manhãs seguidas completas),
+  Mão na Massa (10 extras), Poupadora (R$ 20 guardados) e Invicta (7 dias de sequência).
+  O servidor calcula tudo a partir do histórico; medalhas bloqueadas mostram o quanto falta.
+- **Escudo de sequência 🛡️** — cada semana 100% completa dá +1 escudo. Se ela falhar num dia, o
+  sistema gasta um escudo sozinho e a sequência não zera (o dia protegido fica registrado em
+  `escudos_usados_em`).
+- **Personalização** — avatar (emoji) e tema de cores (Lilás, Azul, Verde, Rosa, Escuro) aplicados na
+  hora por variáveis CSS, salvos no aparelho e na aba `config`.
+
+## Controles dos pais
+
+- **Modo férias / doença** — aba *Mesada* → marque um dia ou um intervalo com motivo. Esses dias não
+  descontam da semanada, não contam como falta no relatório e não quebram a sequência.
+- **⚡ Missão Relâmpago** — na aba *Tarefas*, cria uma tarefa extra válida **só para hoje**
+  (`recorrencia = unica`), sem bagunçar a rotina fixa.
+- **Calendário de constância** — mês a mês: 🟢 tudo feito · 🟡 faltou alguma básica · 🔵 dia pausado ·
+  ⚪ dia futuro, sem tarefas ou anterior ao primeiro registro. Versão simplificada aparece na aba *Eu*.
+
+## Cofrinho virtual (educação financeira)
+
+O saldo em reais aparece para a criança (aba *Eu*) e para os pais (aba *Cofre*). Na área dos pais:
+
+- **💰 Lançar semanada** — calcula a semana fechada anterior e guarda o valor como `entrada`
+  (não lança a mesma semana duas vezes).
+- **🛒 Registrar gasto** — uma `saida` com descrição; o app não deixa gastar mais do que há guardado.
+- **📈 Bônus de 10%** — credita um `rendimento` sobre o saldo, como incentivo à poupança
+  (percentual na chave `bonus_poupanca_pct`).
+
+O histórico mostra entradas, gastos e rendimentos, e cada lançamento pode ser excluído.
 
 ## Regras de cálculo
 

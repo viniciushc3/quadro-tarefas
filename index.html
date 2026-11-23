@@ -21,10 +21,14 @@
 
   <header class="topo">
     <div class="topo-linha">
+      <button class="avatar" id="btnAvatar" aria-label="Personalizar avatar e tema"><span id="avatarEmoji">🦊</span></button>
       <div class="saudacao">
         <span class="ola" id="saudacaoTexto">Oi!</span>
         <h1 id="nomeCrianca">...</h1>
       </div>
+      <button class="btn-pais" id="btnSom" aria-label="Ligar ou desligar som e vibração">
+        <span aria-hidden="true" id="iconeSom">🔊</span>
+      </button>
       <button class="btn-pais" id="btnAbrirPais" aria-label="Área dos pais">
         <span aria-hidden="true">🔒</span>
       </button>
@@ -43,6 +47,7 @@
         <div>
           <strong id="statStreak">0</strong>
           <small id="statStreakLabel">dias seguidos</small>
+          <span class="escudos oculto" id="statEscudos" title="Escudos de sequência">🛡️ 0</span>
         </div>
       </div>
     </div>
@@ -65,6 +70,37 @@
       <div id="listaTarefas" class="grupos"></div>
     </section>
 
+    <!-- Aba Eu (perfil, cofrinho, sonhos, medalhas) -->
+    <section id="abaPerfil" class="aba">
+      <div class="perfil-topo">
+        <button class="avatar grande" id="btnAvatar2" aria-label="Trocar avatar e tema"><span id="avatarEmoji2">🦊</span></button>
+        <div>
+          <h2 id="perfilNome">...</h2>
+          <button class="btn-secundario pequeno" id="btnPersonalizar">🎨 Personalizar</button>
+        </div>
+      </div>
+
+      <div class="pad-lateral">
+        <div class="cofre-card" id="cofreCriancaCard">
+          <small>Meu cofrinho</small>
+          <strong id="cofreCriancaSaldo">R$ 0,00</strong>
+          <span id="cofreCriancaDica">O que eu já guardei</span>
+        </div>
+      </div>
+
+      <h3 class="sub">Meus sonhos</h3>
+      <div id="listaSonhos" class="sonhos"></div>
+      <div class="pad-lateral">
+        <button class="btn-secundario largo" id="btnNovoSonho">+ Novo sonho</button>
+      </div>
+
+      <h3 class="sub">Minhas medalhas</h3>
+      <div id="listaMedalhas" class="medalhas"></div>
+
+      <h3 class="sub">Meu mês</h3>
+      <div class="pad-lateral"><div id="calendarioCrianca" class="calendario"></div></div>
+    </section>
+
     <!-- Aba Lojinha -->
     <section id="abaLoja" class="aba">
       <div class="loja-cabecalho">
@@ -80,6 +116,7 @@
   <nav class="tabbar" id="tabbarCrianca">
     <button class="tab ativa" data-aba="abaTarefas"><span aria-hidden="true">✅</span>Tarefas</button>
     <button class="tab" data-aba="abaLoja"><span aria-hidden="true">🎁</span>Lojinha</button>
+    <button class="tab" data-aba="abaPerfil"><span aria-hidden="true">🏅</span>Eu</button>
   </nav>
 </div>
 
@@ -112,6 +149,7 @@
         <h2>Tarefas</h2>
         <button class="btn-primario pequeno" id="btnNovaTarefa">+ Nova</button>
       </div>
+      <button class="btn-secundario largo" id="btnMissaoRelampago" style="margin:0 0 14px">⚡ Nova Missão Relâmpago (só hoje)</button>
       <div id="listaCrudTarefas" class="crud-lista"></div>
     </section>
 
@@ -123,6 +161,22 @@
       <div id="listaCrudRecompensas" class="crud-lista"></div>
     </section>
 
+    <section id="abaCofre" class="aba pad">
+      <h2 class="titulo-secao">Cofrinho</h2>
+      <div class="cofre-destaque">
+        <small>Saldo guardado</small>
+        <strong id="cofreSaldo">R$ 0,00</strong>
+        <span id="cofreResumo">—</span>
+      </div>
+      <div class="cofre-acoes">
+        <button class="btn-primario pequeno" id="btnFecharSemanada">💰 Lançar semanada</button>
+        <button class="btn-secundario" id="btnRegistrarGasto">🛒 Registrar gasto</button>
+        <button class="btn-secundario" id="btnBonusPoupanca">📈 Bônus de 10%</button>
+      </div>
+      <h3 class="sub">Movimentações</h3>
+      <div id="listaExtrato" class="extrato"></div>
+    </section>
+
     <section id="abaMesada" class="aba pad">
       <div class="linha-titulo">
         <h2>Mesada</h2>
@@ -132,6 +186,13 @@
         </div>
       </div>
       <div id="painelMesada" class="mesada"></div>
+
+      <h3 class="sub">Calendário de constância</h3>
+      <div id="calendarioPais" class="calendario"></div>
+
+      <h3 class="sub">Modo férias / doença</h3>
+      <div id="listaPausas" class="pausas"></div>
+      <button class="btn-secundario largo" id="btnNovaPausa">🏖️ Marcar dias de pausa</button>
 
       <h3 class="sub">Configurações</h3>
       <form id="formConfig" class="form-config">
@@ -184,6 +245,7 @@
     <button class="tab ativa" data-aba="abaAprovacoes"><span aria-hidden="true">🔔</span>Aprovar<span class="badge oculto" id="badgePendentes">0</span></button>
     <button class="tab" data-aba="abaCrudTarefas"><span aria-hidden="true">📋</span>Tarefas</button>
     <button class="tab" data-aba="abaCrudRecompensas"><span aria-hidden="true">🎁</span>Prêmios</button>
+    <button class="tab" data-aba="abaCofre"><span aria-hidden="true">🐷</span>Cofre</button>
     <button class="tab" data-aba="abaMesada"><span aria-hidden="true">💰</span>Mesada</button>
   </nav>
 </div>
@@ -241,10 +303,26 @@
   </div>
 </div>
 
+<div class="modal oculto" id="modalTema" role="dialog" aria-modal="true" aria-labelledby="temaTitulo">
+  <div class="modal-caixa alto">
+    <h2 id="temaTitulo">Deixe do seu jeito</h2>
+    <p class="modal-sub">Escolha seu bichinho e a cor do app</p>
+    <h3 class="sub sub-form">Avatar</h3>
+    <div class="grade-avatares" id="gradeAvatares"></div>
+    <h3 class="sub sub-form">Tema</h3>
+    <div class="grade-temas" id="gradeTemas"></div>
+    <div class="form-acoes">
+      <button type="button" class="btn-secundario" id="btnFecharTema">Fechar</button>
+      <button type="button" class="btn-primario" id="btnSalvarTema">Salvar</button>
+    </div>
+  </div>
+</div>
+
 <canvas id="confete" aria-hidden="true"></canvas>
 <div id="toast" class="toast oculto" role="status" aria-live="polite"></div>
 <div id="statusSync" class="status-sync" title="Status da sincronização"></div>
 
+<script src="sounds.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

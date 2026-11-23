@@ -11,6 +11,8 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbyp7NOpGvkna3RvDMlQFsYM
  * ---------------------------------------------------------- */
 const K = {
   cache:    'qt.cache.v1',
+  visual:   'qt.visual.v1',     // avatar + tema escolhidos neste aparelho
+  marcos:   'qt.marcos.v1',     // metas já comemoradas (para não repetir o som)
   fila:     'qt.fila.v1',
   pin:      'qt.pin.v1',
   destrava: 'qt.destrava.v1'
@@ -21,14 +23,16 @@ const ROTAS = {
   '':               ['crianca', 'abaTarefas'],
   '#tarefas':       ['crianca', 'abaTarefas'],
   '#loja':          ['crianca', 'abaLoja'],
+  '#eu':            ['crianca', 'abaPerfil'],
   '#pais':          ['pais',    'abaAprovacoes'],
   '#pais/aprovar':  ['pais',    'abaAprovacoes'],
   '#pais/tarefas':  ['pais',    'abaCrudTarefas'],
   '#pais/premios':  ['pais',    'abaCrudRecompensas'],
+  '#pais/cofre':    ['pais',    'abaCofre'],
   '#pais/mesada':   ['pais',    'abaMesada']
 };
 const HASH_DA_ABA = {
-  abaTarefas: '#tarefas', abaLoja: '#loja',
+  abaTarefas: '#tarefas', abaLoja: '#loja', abaPerfil: '#eu', abaCofre: '#pais/cofre',
   abaAprovacoes: '#pais', abaCrudTarefas: '#pais/tarefas',
   abaCrudRecompensas: '#pais/premios', abaMesada: '#pais/mesada'
 };
@@ -42,6 +46,17 @@ const PERIODOS = [
 ];
 
 const NOMES_DIAS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const AVATARES = ['🦊', '🐱', '🐶', '🐼', '🐨', '🦄', '🐯', '🐸', '🐧', '🦉', '🐰', '🦋',
+  '🌟', '🚀', '🎸', '⚽', '🧚', '🦕'];
+const TEMAS = [
+  { id: 'lilas',  nome: 'Lilás',  cor: 'linear-gradient(135deg,#6d4bd8,#4f32ad)' },
+  { id: 'oceano', nome: 'Azul',   cor: 'linear-gradient(135deg,#1f7ae0,#14559e)' },
+  { id: 'menta',  nome: 'Verde',  cor: 'linear-gradient(135deg,#12a07a,#0b6d53)' },
+  { id: 'rosa',   nome: 'Rosa',   cor: 'linear-gradient(135deg,#e0397f,#ab2460)' },
+  { id: 'escuro', nome: 'Escuro', cor: 'linear-gradient(135deg,#2a2440,#15121f)' }
+];
 const PREFIXO_RESGATE = 'rec:';
 
 const CACHE_VAZIO = {
@@ -54,6 +69,12 @@ const CACHE_VAZIO = {
   saldo_servidor: 0,
   mesada: {},
   aviso_foto: '',
+  extrato: [],
+  sonhos: [],
+  pausas: {},
+  medalhas: [],
+  saldo_cofre: 0,
+  escudos: 0,
   atualizado_em: 0
 };
 
@@ -74,6 +95,9 @@ let timerRetry = null;
 let tentativas = 0;
 let pinDigitado = '';
 let aoValidarPin = null;
+let visual = carregar(K.visual, { avatar: '🦊', tema: 'lilas' });
+let marcos = carregar(K.marcos, {});
+let mesCalendario = null;        // 'AAAA-MM' exibido no calendário (null = mês atual)
 let sessaoPais = false;
 let destravaAte = Number(carregar(K.destrava, 0)) || 0;
 let aplicandoRota = false;
@@ -86,7 +110,7 @@ function carregar(chave, padrao) {
     const bruto = localStorage.getItem(chave);
     if (!bruto) return estruturaClonada(padrao);
     const v = JSON.parse(bruto);
-    if (v && typeof v === 'object' && !Array.isArray(padrao)) {
+    if (v && typeof v === 'object' && padrao && typeof padrao === 'object' && !Array.isArray(padrao)) {
       return Object.assign(estruturaClonada(padrao), v);
     }
     return v;
@@ -99,7 +123,12 @@ function salvar(chave, valor) {
   try { localStorage.setItem(chave, JSON.stringify(valor)); } catch (e) { /* cota cheia: ignora */ }
 }
 
-function estruturaClonada(o) { return JSON.parse(JSON.stringify(o)); }
+function estruturaClonada(o) { return o === undefined ? o : JSON.parse(JSON.stringify(o)); }
+
+/** Este aparelho já tem avatar/tema escolhidos? */
+function temVisualLocal() {
+  try { return !!localStorage.getItem(K.visual); } catch (e) { return false; }
+}
 
 function persistirCache() { salvar(K.cache, cache); }
 function persistirFila()  { salvar(K.fila, fila); }
@@ -350,9 +379,22 @@ async function atualizarDoServidor(silencioso) {
     registrosLocais.forEach(r => { if (!cache.registros.some(x => x.id === r.id)) cache.registros.push(r); });
     pendentesLocais.forEach(r => { if (!cache.pendentes.some(x => x.id === r.id)) cache.pendentes.unshift(r); });
     cache.saldo_servidor = Number(d.saldo) || 0;
+    cache.extrato = d.extrato || [];
+    cache.sonhos = d.sonhos || [];
+    cache.pausas = d.pausas || {};
+    cache.medalhas = d.medalhas || [];
+    cache.saldo_cofre = Number(d.saldo_cofre) || 0;
+    cache.escudos = Number(d.escudos) || 0;
+    cache.escudos_usados = d.escudos_usados || [];
+    if (d.config && d.config.avatar_crianca && !temVisualLocal()) {
+      visual = { avatar: d.config.avatar_crianca, tema: d.config.tema_app || 'lilas' };
+      salvar(K.visual, visual);
+      aplicarVisual();
+    }
     cache.atualizado_em = Date.now();
     persistirCache();
     renderTudo();
+    verificarMarcos();
     if (fila.length) agendarFlush(500);
   } catch (e) {
     if (!silencioso) toast('Não deu para atualizar agora 🙈');
@@ -365,11 +407,12 @@ async function atualizarDoServidor(silencioso) {
  * ---------------------------------------------------------- */
 function ehResgate(tarefaId) { return String(tarefaId).indexOf(PREFIXO_RESGATE) === 0; }
 
-function tarefaNoDia(t, dow) {
+function tarefaNoDia(t, dow, iso) {
   switch (t.recorrencia) {
     case 'diaria': return true;
     case 'semana': return dow >= 1 && dow <= 5;
     case 'fimdesemana': return dow === 0 || dow === 6;
+    case 'unica': return !!iso && String(t.dias || '').trim() === iso;   // missão relâmpago
     case 'dias':
       return String(t.dias || '').split(/[^0-9]+/).filter(Boolean).map(Number).includes(dow);
     default: return true;
@@ -378,7 +421,14 @@ function tarefaNoDia(t, dow) {
 
 function tarefasDoDia(iso) {
   const dow = parseISO(iso).getDay();
-  return cache.tarefas.filter(t => t.ativa === 'sim' && tarefaNoDia(t, dow));
+  return cache.tarefas.filter(t => t.ativa === 'sim' && tarefaNoDia(t, dow, iso));
+}
+
+function diaPausado(iso) { return !!(cache.pausas && cache.pausas[iso]); }
+
+function saldoCofre() {
+  return (cache.extrato || []).reduce(
+    (s, m) => s + (m.tipo === 'saida' ? -Math.abs(m.valor) : Math.abs(m.valor)), 0);
 }
 
 function registrosDoDia(iso) {
@@ -407,10 +457,18 @@ function streakAtual(iso) {
     const f = feitos[dia] || {};
     return basicas.every(t => f[t.id]);
   };
+  const escudados = {};
+  (cache.escudos_usados || []).forEach(d => { escudados[d] = true; });
+
   let s = 0;
   let cursor = completo(iso) ? iso : somarDias(iso, -1);
   let guard = 0;
-  while (guard++ < 400 && completo(cursor)) { s++; cursor = somarDias(cursor, -1); }
+  while (guard++ < 400) {
+    if (diaPausado(cursor) || escudados[cursor]) { cursor = somarDias(cursor, -1); continue; }
+    if (!completo(cursor)) break;
+    s++;
+    cursor = somarDias(cursor, -1);
+  }
   return s;
 }
 
@@ -450,14 +508,16 @@ function concluirTarefa(tarefa, elemento, foto) {
   enfileirar('concluir', payload, precisa ? 0 : pontos);
 
   renderCrianca();
-  vibrar(18);
   if (precisa) {
+    Som.tocar('enviado');                                  // 2 notas subindo
     toast(foto ? '📸 Foto enviada para aprovação!' : '👏 Enviado para aprovação!');
   } else {
+    Som.tocar(tarefa.conta_mesada === 'sim' ? 'moeda' : 'pop');
     confete(elemento);
     animarSaldo();
     toast(pontos > 0 ? ('🎉 +' + pontos + ' pontos!') : '🎉 Muito bem!');
   }
+  verificarMarcos();
 }
 
 /* Fluxo da foto: abre a câmera, comprime, mostra a prévia e só então conclui. */
@@ -528,7 +588,7 @@ function desfazerTarefa(tarefa) {
   persistirCache();
   enfileirar('desfazer', { id: reg.id, tarefa_id: tarefa.id, data: hoje }, -(Number(reg.pontos_ganhos) || 0));
   renderCrianca();
-  vibrar(10);
+  Som.vibrar(10);
 }
 
 function pedirResgate(rec) {
@@ -550,6 +610,7 @@ function pedirResgate(rec) {
   persistirCache();
   enfileirar('resgatar', { id, recompensa_id: rec.id, data: hoje }, -rec.custo_pontos);
   renderCrianca();
+  Som.tocar('levelup');                                    // resgate é meta alcançada
   confete();
   toast('🎁 Pedido enviado! Espere a autorização.');
 }
@@ -582,6 +643,7 @@ function decidir(registroId, aprovar) {
 
   enfileirar(aprovar ? 'aprovar' : 'rejeitar', { id: registroId, pin: pinLocal }, delta);
   renderPais();
+  Som.tocar(aprovar ? 'aprovado' : 'recusado');
   toast(aprovar ? '✅ Aprovado' : '🚫 Recusado');
 }
 
@@ -632,6 +694,72 @@ function salvarConfig(itens) {
 }
 
 /* ------------------------------------------------------------
+ *  Visual: avatar e tema
+ * ---------------------------------------------------------- */
+function aplicarVisual() {
+  const tema = TEMAS.some(t => t.id === visual.tema) ? visual.tema : 'lilas';
+  document.documentElement.setAttribute('data-tema', tema);
+  const cor = tema === 'escuro' ? '#15121f'
+    : getComputedStyle(document.documentElement).getPropertyValue('--roxo').trim() || '#6d4bd8';
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.setAttribute('content', cor);
+  ['avatarEmoji', 'avatarEmoji2'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = visual.avatar || '🦊';
+  });
+}
+
+function salvarVisual(avatar, tema) {
+  visual = { avatar: avatar || visual.avatar, tema: tema || visual.tema };
+  salvar(K.visual, visual);
+  aplicarVisual();
+  cache.config = Object.assign({}, cache.config, { avatar_crianca: visual.avatar, tema_app: visual.tema });
+  persistirCache();
+  enfileirar('salvar_personalizacao', { avatar_crianca: visual.avatar, tema_app: visual.tema }, 0);
+}
+
+/* ------------------------------------------------------------
+ *  Comemorações (som de "level up" sem repetir)
+ * ---------------------------------------------------------- */
+function comemorar(chave, elemento) {
+  if (marcos[chave]) return false;
+  marcos[chave] = Date.now();
+  // guarda no máximo os 80 marcos mais recentes
+  const chaves = Object.keys(marcos);
+  if (chaves.length > 80) {
+    chaves.sort((a, b) => marcos[a] - marcos[b]).slice(0, chaves.length - 80)
+      .forEach(k => { delete marcos[k]; });
+  }
+  salvar(K.marcos, marcos);
+  Som.tocar('levelup');
+  confete(elemento);
+  return true;
+}
+
+/** Olha o estado atual e comemora o que for novidade. */
+function verificarMarcos() {
+  const hoje = hojeISO();
+  const basicas = tarefasDoDia(hoje).filter(t => t.tipo === 'basica');
+  const feitas = basicas.filter(t => {
+    const r = registroDaTarefa(t.id, hoje);
+    return r && r.status !== 'rejeitada';
+  }).length;
+
+  if (basicas.length && feitas === basicas.length) {
+    if (comemorar('dia:' + hoje)) toast('🏆 Tudo pronto hoje! Mandou bem!');
+  }
+  (cache.medalhas || []).forEach(m => {
+    if (m.desbloqueada && comemorar('medalha:' + m.id)) toast(m.icone + ' Nova medalha: ' + m.titulo + '!');
+  });
+  (cache.sonhos || []).forEach(s => {
+    const atual = s.tipo_meta === 'pontos' ? saldoAtual() : saldoCofre();
+    if (s.valor_alvo > 0 && atual >= s.valor_alvo && comemorar('sonho:' + s.id)) {
+      toast(s.icone + ' Você juntou o suficiente para: ' + s.titulo + '!');
+    }
+  });
+}
+
+/* ------------------------------------------------------------
  *  RENDER — criança
  * ---------------------------------------------------------- */
 function renderTudo() {
@@ -652,6 +780,9 @@ function renderCrianca() {
   const streak = streakAtual(hoje);
   document.getElementById('statStreak').textContent = streak;
   document.getElementById('statStreakLabel').textContent = streak === 1 ? 'dia seguido' : 'dias seguidos';
+  const elEscudos = document.getElementById('statEscudos');
+  elEscudos.textContent = '🛡️ ' + (cache.escudos || 0);
+  elEscudos.classList.toggle('oculto', !cache.escudos);
   document.getElementById('lojaSaldo').textContent = saldoAtual();
 
   // progresso das básicas do dia
@@ -674,6 +805,7 @@ function renderCrianca() {
 
   renderListaTarefas(doDia, hoje);
   renderLoja(hoje);
+  renderPerfil();
 }
 
 function renderListaTarefas(doDia, hoje) {
@@ -825,6 +957,9 @@ function renderPais() {
   renderResumoPais();
   renderPendentes();
   renderHistoricoFotos();
+  renderCofre();
+  renderPausas();
+  renderCalendario('calendarioPais', true);
   renderCrudTarefas();
   renderCrudRecompensas();
   renderMesada();
@@ -1084,6 +1219,253 @@ function preencherFormConfig() {
     ? cache.config.modo_desconto : 'fixo';
 }
 
+
+/* ------------------------------------------------------------
+ *  RENDER — perfil da criança (cofrinho, sonhos, medalhas)
+ * ---------------------------------------------------------- */
+function renderPerfil() {
+  const nome = cache.config.nome_crianca || 'Oi!';
+  const elNome = document.getElementById('perfilNome');
+  if (elNome) elNome.textContent = nome;
+
+  const cofre = saldoCofre();
+  const elSaldo = document.getElementById('cofreCriancaSaldo');
+  if (elSaldo) elSaldo.textContent = dinheiro(cofre);
+  const dica = document.getElementById('cofreCriancaDica');
+  if (dica) {
+    const ultima = (cache.extrato || []).slice().sort((a, b) => (a.data < b.data ? 1 : -1))[0];
+    dica.textContent = ultima
+      ? 'Última movimentação: ' + ultima.descricao + ' · ' + dataCurta(ultima.data)
+      : 'Quando a semanada for lançada, ela aparece aqui';
+  }
+
+  renderSonhos();
+  renderMedalhas();
+  renderCalendario('calendarioCrianca', false);
+}
+
+function renderSonhos() {
+  const alvo = document.getElementById('listaSonhos');
+  if (!alvo) return;
+  alvo.innerHTML = '';
+  const lista = cache.sonhos || [];
+  if (!lista.length) {
+    alvo.appendChild(vazio('🌟', 'Nenhum sonho ainda. Toque em “+ Novo sonho” e escolha uma meta!'));
+    return;
+  }
+  lista.forEach(s => {
+    const emPontos = s.tipo_meta === 'pontos';
+    const atual = emPontos ? saldoAtual() : saldoCofre();
+    const pct = s.valor_alvo > 0 ? Math.max(0, Math.min(100, Math.round((atual / s.valor_alvo) * 100))) : 0;
+    const falta = Math.max(0, s.valor_alvo - atual);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sonho' + (pct >= 100 ? ' completo' : '');
+    btn.innerHTML =
+      '<span class="icone" aria-hidden="true">' + escapar(s.icone || '🌟') + '</span>' +
+      '<span class="corpo">' +
+        '<span class="titulo">' + escapar(s.titulo) + '</span>' +
+        '<span class="meta">' +
+          (emPontos ? atual + ' de ' + s.valor_alvo + ' pontos' : dinheiro(atual) + ' de ' + dinheiro(s.valor_alvo)) +
+          ' · ' + (pct >= 100 ? '🎉 conquistado!' : 'faltam ' + (emPontos ? falta + ' pts' : dinheiro(falta))) +
+        '</span>' +
+        '<span class="barra-sonho"><div style="width:' + pct + '%"></div></span>' +
+      '</span>';
+    btn.addEventListener('click', () => abrirFormSonho(s));
+    alvo.appendChild(btn);
+  });
+}
+
+function renderMedalhas() {
+  const alvo = document.getElementById('listaMedalhas');
+  if (!alvo) return;
+  alvo.innerHTML = '';
+  const lista = cache.medalhas || [];
+  if (!lista.length) {
+    alvo.appendChild(vazio('🏅', 'As medalhas aparecem quando o app sincronizar.'));
+    return;
+  }
+  lista.forEach(m => {
+    const pct = Math.round((m.progresso || 0) * 100);
+    const div = document.createElement('div');
+    div.className = 'medalha' + (m.desbloqueada ? ' ganha' : '');
+    div.innerHTML =
+      '<span class="icone" aria-hidden="true">' + escapar(m.icone) + '</span>' +
+      '<span class="titulo">' + escapar(m.titulo) + '</span>' +
+      '<span class="desc">' + escapar(m.descricao) + '</span>' +
+      (m.desbloqueada ? '' : '<span class="barra-sonho"><div style="width:' + pct + '%"></div></span>');
+    alvo.appendChild(div);
+  });
+}
+
+/* ------------------------------------------------------------
+ *  Calendário de constância
+ * ---------------------------------------------------------- */
+function renderCalendario(elementoId, comControles) {
+  const alvo = document.getElementById(elementoId);
+  if (!alvo) return;
+
+  const hoje = hojeISO();
+  const base = mesCalendario || hoje.slice(0, 7);
+  const [ano, mes] = base.split('-').map(Number);
+  const primeiro = new Date(ano, mes - 1, 1, 12);
+  const diasNoMes = new Date(ano, mes, 0).getDate();
+  const vazios = primeiro.getDay();
+
+  const feitosPorDia = {};
+  let inicio = null;                       // antes do primeiro registro, o quadro nem existia
+  cache.registros.forEach(r => {
+    if (!inicio || r.data < inicio) inicio = r.data;
+    if (r.status === 'rejeitada' || ehResgate(r.tarefa_id)) return;
+    (feitosPorDia[r.data] = feitosPorDia[r.data] || {})[r.tarefa_id] = true;
+  });
+
+  let celulas = '';
+  for (let i = 0; i < vazios; i++) celulas += '<div class="cal-dia vazio"></div>';
+
+  for (let d = 1; d <= diasNoMes; d++) {
+    const iso = base + '-' + dois(d);
+    let classe = '';
+    let titulo = dataCurta(iso);
+
+    if (diaPausado(iso)) {
+      classe = 'azul';
+      titulo += ' · ' + cache.pausas[iso];
+    } else if (iso > hoje) {
+      classe = '';
+      titulo += ' · ainda vai chegar';
+    } else if (inicio && iso < inicio) {
+      classe = '';
+      titulo += ' · antes de começar';
+    } else {
+      const basicas = tarefasDoDia(iso).filter(t => t.tipo === 'basica');
+      if (!basicas.length) {
+        titulo += ' · sem tarefas';
+      } else {
+        const f = feitosPorDia[iso] || {};
+        const feitas = basicas.filter(t => f[t.id]).length;
+        classe = feitas === basicas.length ? 'verde' : 'amarelo';
+        titulo += ' · ' + feitas + ' de ' + basicas.length;
+      }
+    }
+    celulas += '<div class="cal-dia ' + classe + (iso === hoje ? ' hoje' : '') +
+      '" title="' + escapar(titulo) + '">' + d + '</div>';
+  }
+
+  alvo.innerHTML =
+    '<div class="cal-topo">' +
+      (comControles ? '<button type="button" data-mes="-1" aria-label="Mês anterior">‹</button>' : '<span></span>') +
+      '<strong>' + MESES[mes - 1][0].toUpperCase() + MESES[mes - 1].slice(1) + ' de ' + ano + '</strong>' +
+      (comControles ? '<button type="button" data-mes="1" aria-label="Próximo mês">›</button>' : '<span></span>') +
+    '</div>' +
+    '<div class="cal-grade">' + NOMES_DIAS.map(d => '<div class="cal-cab">' + d[0] + '</div>').join('') + celulas + '</div>' +
+    '<div class="cal-legenda">' +
+      '<span class="l-verde">tudo feito</span>' +
+      '<span class="l-amarelo">faltou algo</span>' +
+      '<span class="l-azul">pausa</span>' +
+      '<span class="l-cinza">sem registro</span>' +
+    '</div>';
+
+  if (comControles) {
+    alvo.querySelectorAll('[data-mes]').forEach(b => {
+      b.addEventListener('click', () => {
+        const passo = Number(b.dataset.mes);
+        const d = new Date(ano, mes - 1 + passo, 1, 12);
+        mesCalendario = d.getFullYear() + '-' + dois(d.getMonth() + 1);
+        renderCalendario(elementoId, true);
+      });
+    });
+  }
+}
+
+/* ------------------------------------------------------------
+ *  RENDER — cofrinho e pausas (pais)
+ * ---------------------------------------------------------- */
+function renderCofre() {
+  const saldo = saldoCofre();
+  const elSaldo = document.getElementById('cofreSaldo');
+  if (!elSaldo) return;
+  elSaldo.textContent = dinheiro(saldo);
+
+  const movs = (cache.extrato || []).slice().sort((a, b) => (a.data < b.data ? 1 : -1));
+  const entradas = movs.filter(m => m.tipo === 'entrada').reduce((s, m) => s + Math.abs(m.valor), 0);
+  const saidas = movs.filter(m => m.tipo === 'saida').reduce((s, m) => s + Math.abs(m.valor), 0);
+  const rend = movs.filter(m => m.tipo === 'rendimento').reduce((s, m) => s + Math.abs(m.valor), 0);
+  document.getElementById('cofreResumo').textContent =
+    'Entradas ' + dinheiro(entradas) + ' · Gastos ' + dinheiro(saidas) + ' · Rendimentos ' + dinheiro(rend);
+
+  const alvo = document.getElementById('listaExtrato');
+  alvo.innerHTML = '';
+  if (!movs.length) {
+    alvo.appendChild(vazio('🐷', 'Nenhuma movimentação ainda. Use “Lançar semanada” depois do fechamento da semana.'));
+    return;
+  }
+  const icones = { entrada: '💰', saida: '🛒', rendimento: '📈' };
+  const sinais = { entrada: '+', saida: '−', rendimento: '+' };
+  movs.slice(0, 40).forEach(m => {
+    const div = document.createElement('div');
+    div.className = 'mov';
+    div.innerHTML =
+      '<span class="icone" aria-hidden="true">' + (icones[m.tipo] || '•') + '</span>' +
+      '<span class="corpo">' +
+        '<span class="titulo">' + escapar(m.descricao) + '</span>' +
+        '<span class="meta">' + dataCurta(m.data) + ' · ' + m.tipo + '</span>' +
+      '</span>' +
+      '<span class="valor ' + m.tipo + '">' + sinais[m.tipo] + ' ' + dinheiro(Math.abs(m.valor)) + '</span>' +
+      '<button class="btn-perigo" data-del="1" aria-label="Excluir lançamento">✕</button>';
+    div.querySelector('[data-del]').addEventListener('click', () => {
+      if (!confirm('Excluir "' + m.descricao + '" (' + dinheiro(Math.abs(m.valor)) + ')?')) return;
+      cache.extrato = cache.extrato.filter(x => x.id !== m.id);
+      persistirCache();
+      enfileirar('excluir_extrato', { id: m.id, pin: pinLocal }, 0);
+      renderPais();
+      toast('🗑️ Lançamento excluído');
+    });
+    alvo.appendChild(div);
+  });
+}
+
+function renderPausas() {
+  const alvo = document.getElementById('listaPausas');
+  if (!alvo) return;
+  alvo.innerHTML = '';
+  const dias = Object.keys(cache.pausas || {}).sort().reverse().slice(0, 30);
+  if (!dias.length) {
+    alvo.appendChild(vazio('🏖️', 'Nenhum dia pausado. Use isto em viagens ou quando ela estiver doente.'));
+    return;
+  }
+  // agrupa dias seguidos com o mesmo motivo
+  const blocos = [];
+  dias.slice().sort().forEach(d => {
+    const ultimo = blocos[blocos.length - 1];
+    if (ultimo && ultimo.motivo === cache.pausas[d] && somarDias(ultimo.ate, 1) === d) ultimo.ate = d;
+    else blocos.push({ de: d, ate: d, motivo: cache.pausas[d] });
+  });
+
+  blocos.reverse().forEach(b => {
+    const div = document.createElement('div');
+    div.className = 'pausa';
+    const intervalo = b.de === b.ate ? dataCurta(b.de) : dataCurta(b.de) + ' a ' + dataCurta(b.ate);
+    div.innerHTML =
+      '<span aria-hidden="true">🏖️</span>' +
+      '<span class="corpo"><strong>' + escapar(b.motivo) + '</strong>' +
+      '<span class="meta">' + intervalo + '</span></span>' +
+      '<button class="btn-perigo" data-del="1">Remover</button>';
+    div.querySelector('[data-del]').addEventListener('click', () => {
+      const novas = Object.assign({}, cache.pausas);
+      let d = b.de, g = 0;
+      while (d <= b.ate && g++ < 90) { delete novas[d]; d = somarDias(d, 1); }
+      cache.pausas = novas;
+      persistirCache();
+      enfileirar('excluir_pausa', { de: b.de, ate: b.ate, pin: pinLocal }, 0);
+      renderPais();
+      renderCrianca();
+      toast('🗑️ Pausa removida');
+    });
+    alvo.appendChild(div);
+  });
+}
+
 /* ------------------------------------------------------------
  *  Formulários (modal)
  * ---------------------------------------------------------- */
@@ -1161,6 +1543,273 @@ function abrirFormTarefa(t) {
     fecharForm();
   };
   document.getElementById('modalForm').classList.remove('oculto');
+}
+
+
+function abrirFormSonho(s) {
+  const novo = !s;
+  s = s || { id: uid(), titulo: '', icone: '🌟', tipo_meta: 'dinheiro', valor_alvo: 50, concluido: 'nao' };
+  document.getElementById('formTitulo').textContent = novo ? 'Novo sonho' : 'Editar sonho';
+  const f = document.getElementById('formEdicao');
+  f.innerHTML =
+    '<div class="linha-campos">' +
+      '<label>Ícone<input name="icone" maxlength="4" value="' + escapar(s.icone) + '"></label>' +
+      '<label>Meta em<select name="tipo_meta">' +
+        opt('dinheiro', 'Reais (cofrinho)', s.tipo_meta) + opt('pontos', 'Pontos', s.tipo_meta) +
+      '</select></label>' +
+    '</div>' +
+    '<label>O que você quer?<input name="titulo" required value="' + escapar(s.titulo) + '" placeholder="Ex.: patins novos"></label>' +
+    '<label>Quanto precisa juntar<input name="valor_alvo" type="number" min="1" step="0.01" inputmode="decimal" value="' + s.valor_alvo + '"></label>' +
+    '<div class="form-acoes">' +
+      (novo ? '' : '<button type="button" class="btn-perigo" data-del="1">Excluir</button>') +
+      '<button type="button" class="btn-secundario" data-cancel="1">Cancelar</button>' +
+      '<button type="submit" class="btn-primario">Salvar</button>' +
+    '</div>';
+
+  f.querySelector('[data-cancel]').onclick = fecharForm;
+  const del = f.querySelector('[data-del]');
+  if (del) del.onclick = () => {
+    if (!confirm('Excluir o sonho "' + s.titulo + '"?')) return;
+    cache.sonhos = cache.sonhos.filter(x => x.id !== s.id);
+    persistirCache();
+    enfileirar('excluir_sonho', { id: s.id }, 0);
+    fecharForm();
+    renderCrianca();
+    toast('🗑️ Sonho excluído');
+  };
+  f.onsubmit = ev => {
+    ev.preventDefault();
+    const dados = {
+      id: s.id,
+      titulo: f.titulo.value.trim(),
+      icone: f.icone.value.trim() || '🌟',
+      tipo_meta: f.tipo_meta.value,
+      valor_alvo: Number(f.valor_alvo.value) || 0,
+      concluido: s.concluido || 'nao'
+    };
+    if (!dados.titulo || !dados.valor_alvo) { toast('Preencha o nome e o valor'); return; }
+    const existente = (cache.sonhos || []).filter(x => x.id === dados.id)[0];
+    if (existente) Object.assign(existente, dados);
+    else (cache.sonhos = cache.sonhos || []).push(dados);
+    persistirCache();
+    enfileirar('salvar_sonho', dados, 0);
+    fecharForm();
+    renderCrianca();
+    Som.tocar('pop');
+    toast('🌟 Sonho salvo!');
+  };
+  document.getElementById('modalForm').classList.remove('oculto');
+}
+
+function abrirFormPausa() {
+  const hoje = hojeISO();
+  document.getElementById('formTitulo').textContent = 'Dias de pausa';
+  const f = document.getElementById('formEdicao');
+  f.innerHTML =
+    '<p class="modal-sub">Nestes dias nada conta como falta, a semanada não é descontada e a sequência não quebra.</p>' +
+    '<div class="linha-campos">' +
+      '<label>De<input name="de" type="date" value="' + hoje + '" required></label>' +
+      '<label>Até<input name="ate" type="date" value="' + hoje + '" required></label>' +
+    '</div>' +
+    '<label>Motivo<input name="motivo" value="Viagem" maxlength="40" required></label>' +
+    '<div class="form-acoes">' +
+      '<button type="button" class="btn-secundario" data-cancel="1">Cancelar</button>' +
+      '<button type="submit" class="btn-primario">Marcar pausa</button>' +
+    '</div>';
+  f.querySelector('[data-cancel]').onclick = fecharForm;
+  f.onsubmit = ev => {
+    ev.preventDefault();
+    let de = f.de.value, ate = f.ate.value || f.de.value;
+    if (!de) { toast('Escolha a data'); return; }
+    if (ate < de) { const t = de; de = ate; ate = t; }
+    const motivo = f.motivo.value.trim() || 'Pausa';
+    const novas = Object.assign({}, cache.pausas);
+    let d = de, g = 0;
+    while (d <= ate && g++ < 90) { novas[d] = motivo; d = somarDias(d, 1); }
+    cache.pausas = novas;
+    persistirCache();
+    enfileirar('salvar_pausa', { de, ate, motivo, pin: pinLocal }, 0);
+    fecharForm();
+    renderPais();
+    renderCrianca();
+    toast('🏖️ Pausa marcada');
+  };
+  document.getElementById('modalForm').classList.remove('oculto');
+}
+
+function abrirFormGasto() {
+  document.getElementById('formTitulo').textContent = 'Registrar gasto';
+  const f = document.getElementById('formEdicao');
+  f.innerHTML =
+    '<p class="modal-sub">Saldo no cofrinho: <strong>' + dinheiro(saldoCofre()) + '</strong></p>' +
+    '<label>No que gastou?<input name="descricao" required placeholder="Ex.: comprou um livro" maxlength="60"></label>' +
+    '<label>Valor (R$)<input name="valor" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>' +
+    '<div class="form-acoes">' +
+      '<button type="button" class="btn-secundario" data-cancel="1">Cancelar</button>' +
+      '<button type="submit" class="btn-primario">Registrar saída</button>' +
+    '</div>';
+  f.querySelector('[data-cancel]').onclick = fecharForm;
+  f.onsubmit = ev => {
+    ev.preventDefault();
+    const valor = Number(f.valor.value) || 0;
+    const descricao = f.descricao.value.trim();
+    if (!valor || !descricao) { toast('Preencha a descrição e o valor'); return; }
+    if (valor > saldoCofre() + 0.001) { toast('💸 Isso é mais do que tem guardado'); return; }
+    lancarNoCofre('saida', valor, descricao);
+    fecharForm();
+  };
+  document.getElementById('modalForm').classList.remove('oculto');
+}
+
+function abrirMissaoRelampago() {
+  const hoje = hojeISO();
+  document.getElementById('formTitulo').textContent = '⚡ Missão Relâmpago';
+  const f = document.getElementById('formEdicao');
+  f.innerHTML =
+    '<p class="modal-sub">Uma tarefa extra válida só para hoje (' + dataCurta(hoje) + '), sem mexer na rotina fixa.</p>' +
+    '<div class="linha-campos">' +
+      '<label>Ícone<input name="icone" maxlength="4" value="⚡"></label>' +
+      '<label>Pontos<input name="pontos" type="number" min="0" step="1" inputmode="numeric" value="5"></label>' +
+    '</div>' +
+    '<label>O que precisa ser feito?<input name="titulo" required placeholder="Ex.: ajudar a guardar as compras"></label>' +
+    '<label>Período<select name="periodo">' +
+      PERIODOS.map(p => opt(p.id, p.rotulo, 'qualquer')).join('') +
+    '</select></label>' +
+    '<label class="check-linha"><input type="checkbox" name="precisa_aprova" checked> Precisa de aprovação dos pais</label>' +
+    '<label class="check-linha"><input type="checkbox" name="precisa_foto"> Precisa de foto</label>' +
+    '<div class="form-acoes">' +
+      '<button type="button" class="btn-secundario" data-cancel="1">Cancelar</button>' +
+      '<button type="submit" class="btn-primario">Criar missão</button>' +
+    '</div>';
+  f.querySelector('[data-cancel]').onclick = fecharForm;
+  f.onsubmit = ev => {
+    ev.preventDefault();
+    const titulo = f.titulo.value.trim();
+    if (!titulo) { toast('Dê um nome para a missão'); return; }
+    salvarTarefa({
+      id: uid(),
+      titulo,
+      icone: f.icone.value.trim() || '⚡',
+      tipo: 'extra',
+      pontos: Number(f.pontos.value) || 0,
+      periodo: f.periodo.value,
+      recorrencia: 'unica',
+      dias: hoje,
+      precisa_aprova: f.precisa_aprova.checked ? 'sim' : 'nao',
+      precisa_foto: f.precisa_foto.checked ? 'sim' : 'nao',
+      conta_mesada: 'nao',
+      ativa: 'sim',
+      criada_em: new Date().toISOString()
+    });
+    fecharForm();
+    Som.tocar('enviado');
+    toast('⚡ Missão criada só para hoje!');
+  };
+  document.getElementById('modalForm').classList.remove('oculto');
+}
+
+/* ------------------------------------------------------------
+ *  Ações do cofrinho (pais)
+ * ---------------------------------------------------------- */
+function lancarNoCofre(tipo, valor, descricao, acao, extra) {
+  const id = uid();
+  const mov = { id, data: hojeISO(), tipo, descricao, valor: Math.abs(Number(valor) || 0) };
+  cache.extrato = (cache.extrato || []).concat([mov]);
+  cache.saldo_cofre = saldoCofre();
+  persistirCache();
+  enfileirar(acao || 'lancar_extrato', Object.assign({ pin: pinLocal, id, tipo, valor: mov.valor, descricao, data: mov.data }, extra || {}), 0);
+  renderPais();
+  renderCrianca();
+  Som.tocar(tipo === 'saida' ? 'pop' : 'moeda');
+  toast((tipo === 'saida' ? '🛒 ' : '💰 ') + descricao + ' · ' + dinheiro(mov.valor));
+  verificarMarcos();
+}
+
+async function fecharSemanadaNoCofre() {
+  const botao = document.getElementById('btnFecharSemanada');
+  if (!navigator.onLine || !apiConfigurada()) { toast('📴 Precisa de internet para fechar a semanada'); return; }
+  const rotulo = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = '⏳ Calculando...';
+  try {
+    await flush();
+    const r = await apiPost('fechar_semanada', { pin: pinLocal });
+    if (r.extrato) { cache.extrato = r.extrato; cache.saldo_cofre = Number(r.saldo_cofre) || saldoCofre(); persistirCache(); }
+    renderPais();
+    renderCrianca();
+    if (r.duplicado || r.nada_a_pagar) {
+      toast('ℹ️ ' + r.msg);
+    } else {
+      Som.tocar('moeda');
+      toast('💰 ' + r.msg);
+      verificarMarcos();
+    }
+  } catch (e) {
+    toast('⚠️ ' + (e.message || 'Não deu para fechar a semanada'));
+  } finally {
+    botao.disabled = false;
+    botao.textContent = rotulo;
+  }
+}
+
+async function aplicarBonusPoupanca() {
+  const botao = document.getElementById('btnBonusPoupanca');
+  if (saldoCofre() <= 0) { toast('🐷 O cofrinho está vazio'); return; }
+  if (!navigator.onLine || !apiConfigurada()) { toast('📴 Precisa de internet para aplicar o bônus'); return; }
+  const rotulo = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = '⏳...';
+  try {
+    await flush();
+    const r = await apiPost('bonus_poupanca', { pin: pinLocal });
+    if (r.extrato) { cache.extrato = r.extrato; cache.saldo_cofre = Number(r.saldo_cofre) || saldoCofre(); persistirCache(); }
+    renderPais();
+    renderCrianca();
+    Som.tocar('levelup');
+    toast('📈 ' + r.msg);
+    verificarMarcos();
+  } catch (e) {
+    toast('⚠️ ' + (e.message || 'Não deu para aplicar o bônus'));
+  } finally {
+    botao.disabled = false;
+    botao.textContent = rotulo;
+  }
+}
+
+/* ------------------------------------------------------------
+ *  Modal de personalização
+ * ---------------------------------------------------------- */
+let escolhaVisual = null;
+
+function abrirPersonalizacao() {
+  escolhaVisual = { avatar: visual.avatar, tema: visual.tema };
+  const gradeA = document.getElementById('gradeAvatares');
+  gradeA.innerHTML = AVATARES.map(a =>
+    '<button type="button" data-avatar="' + a + '"' + (a === visual.avatar ? ' class="sel"' : '') + '>' + a + '</button>').join('');
+  const gradeT = document.getElementById('gradeTemas');
+  gradeT.innerHTML = TEMAS.map(t =>
+    '<button type="button" data-tema="' + t.id + '" style="background:' + t.cor + '"' +
+    (t.id === visual.tema ? ' class="sel"' : '') + '>' + t.nome + '</button>').join('');
+
+  gradeA.querySelectorAll('[data-avatar]').forEach(b => b.addEventListener('click', () => {
+    escolhaVisual.avatar = b.dataset.avatar;
+    gradeA.querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b));
+    Som.tocar('pop');
+  }));
+  gradeT.querySelectorAll('[data-tema]').forEach(b => b.addEventListener('click', () => {
+    escolhaVisual.tema = b.dataset.tema;
+    gradeT.querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b));
+    document.documentElement.setAttribute('data-tema', escolhaVisual.tema);   // prévia na hora
+    Som.tocar('pop');
+  }));
+
+  document.getElementById('modalTema').classList.remove('oculto');
+}
+
+function fecharPersonalizacao(salvando) {
+  document.getElementById('modalTema').classList.add('oculto');
+  if (!salvando) aplicarVisual();        // desfaz a prévia
+  escolhaVisual = null;
 }
 
 function abrirFormRecompensa(r) {
@@ -1532,6 +2181,32 @@ document.getElementById('tecladoPin').addEventListener('click', e => {
   if (pinDigitado.length === 4) setTimeout(validarPin, 120);
 });
 
+document.getElementById('btnSom').addEventListener('click', () => {
+  const ligado = Som.alternar();
+  document.getElementById('iconeSom').textContent = ligado ? '🔊' : '🔇';
+  toast(ligado
+    ? (Som.temVibracao ? '🔊 Som e vibração ligados' : '🔊 Som ligado')
+    : '🔇 Som e vibração desligados');
+});
+
+document.getElementById('btnAvatar').addEventListener('click', abrirPersonalizacao);
+document.getElementById('btnAvatar2').addEventListener('click', abrirPersonalizacao);
+document.getElementById('btnPersonalizar').addEventListener('click', abrirPersonalizacao);
+document.getElementById('btnFecharTema').addEventListener('click', () => fecharPersonalizacao(false));
+document.getElementById('btnSalvarTema').addEventListener('click', () => {
+  if (escolhaVisual) salvarVisual(escolhaVisual.avatar, escolhaVisual.tema);
+  fecharPersonalizacao(true);
+  Som.tocar('levelup');
+  toast('🎨 Pronto, ficou com a sua cara!');
+});
+
+document.getElementById('btnNovoSonho').addEventListener('click', () => abrirFormSonho(null));
+document.getElementById('btnMissaoRelampago').addEventListener('click', abrirMissaoRelampago);
+document.getElementById('btnNovaPausa').addEventListener('click', abrirFormPausa);
+document.getElementById('btnRegistrarGasto').addEventListener('click', abrirFormGasto);
+document.getElementById('btnFecharSemanada').addEventListener('click', fecharSemanadaNoCofre);
+document.getElementById('btnBonusPoupanca').addEventListener('click', aplicarBonusPoupanca);
+
 document.getElementById('btnNovaTarefa').addEventListener('click', () => abrirFormTarefa(null));
 document.getElementById('btnNovaRecompensa').addEventListener('click', () => abrirFormRecompensa(null));
 
@@ -1588,6 +2263,7 @@ document.querySelectorAll('.modal').forEach(m => {
     if (m.id === 'modalPin') fecharPin(true);
     else if (m.id === 'modalPrevia') fecharPrevia();
     else if (m.id === 'modalFoto') fecharFotoGrande();
+    else if (m.id === 'modalTema') fecharPersonalizacao(false);
     else fecharForm();
   });
 });
@@ -1623,6 +2299,10 @@ document.addEventListener('visibilitychange', () => {
  *  Boot
  * ---------------------------------------------------------- */
 (function boot() {
+  // 0) tema, avatar e estado do som antes do primeiro desenho
+  aplicarVisual();
+  document.getElementById('iconeSom').textContent = Som.ativo ? '🔊' : '🔇';
+
   // 1) desenha instantaneamente com o cache local e abre a rota pedida no link
   renderTudo();
   aplicarRota();
