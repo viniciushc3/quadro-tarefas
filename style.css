@@ -476,3 +476,7 @@ input:focus, select:focus { outline: none; border-color: var(--roxo); }
 .resumo-item.destaque-aviso { grid-column: 1 / -1; }
 .resumo-item.destaque-aviso strong { font-size: 1rem; margin-bottom: 4px; }
 .resumo-item.destaque-aviso small { display: block; line-height: 1.4; }
+
+.sub-form { padding: 10px 0 0; margin-top: 6px; border-top: 1px solid var(--borda); }
+.btn-secundario.largo { width: 100%; padding: 13px 16px; margin-top: 14px; }
+button[disabled] { opacity: .6; pointer-events: none; }

@@ -44,7 +44,12 @@ var CONFIG_PADRAO = {
   valor_mesada_base: '40',
   valor_por_ponto: '0.10',
   nome_crianca: 'Minha filha',
-  meta_pontos_semana: '50'
+  meta_pontos_semana: '50',
+  // Relatório semanal por e-mail
+  email_relatorio: '',
+  valor_semanada_base: '12.50',
+  modo_desconto: 'fixo',          // 'fixo' | 'proporcional' | 'nenhum'
+  valor_desconto_falta: '1.00'
 };
 
 var PREFIXO_RESGATE = 'rec:';
@@ -176,6 +181,9 @@ function executar_(acao, p) {
     case 'setup':           exigirPin_(p); return { ok: true, msg: setupPlanilha() };
     case 'limpar_fotos':    exigirPin_(p); return { ok: true, msg: limparFotosAntigas() };
     case 'testar_drive':    exigirPin_(p); return { ok: true, msg: testarDrive() };
+    case 'enviar_relatorio_semanal': exigirPin_(p); return apiEnviarRelatorio_(p);
+    case 'previa_relatorio_semanal': exigirPin_(p);
+      return { ok: true, relatorio: calcularRelatorioSemanal_(p.de, p.ate) };
     default:
       throw new Error('Ação desconhecida: ' + acao);
   }
@@ -744,6 +752,374 @@ function criarGatilhoLimpezaFotos() {
   if (existe) return 'O gatilho diário já existe.';
   ScriptApp.newTrigger('limparFotosAntigas').timeBased().atHour(3).everyDays(1).create();
   return 'Gatilho diário criado (roda por volta das 3h).';
+}
+
+
+/* ============================================================
+ *  RELATÓRIO SEMANAL POR E-MAIL
+ *  Apura a semana fechada anterior (segunda a domingo) e manda
+ *  um resumo em HTML para o endereço de `email_relatorio`.
+ * ============================================================ */
+
+/**
+ * Função do gatilho semanal (e do botão "Enviar agora" no app).
+ * Sem argumentos, apura a última semana fechada: da segunda-feira
+ * passada até o domingo de ontem.
+ */
+function enviarRelatorioSemanal(de, ate) {
+  var periodo = (de && ate) ? { de: de, ate: ate } : semanaFechadaAnterior_(hojeISO_());
+  var r = calcularRelatorioSemanal_(periodo.de, periodo.ate);
+
+  var destino = String(r.config.email_relatorio || '').trim();
+  if (!destino) {
+    throw new Error('Nenhum e-mail configurado. Preencha a chave `email_relatorio` na aba config ' +
+                    '(ou no campo E-mail do relatório, na área dos pais).');
+  }
+
+  var assunto = 'Resumo Semanal de Tarefas - ' + (r.config.nome_crianca || 'Criança') +
+                ' (' + dataBR_(r.de) + ' a ' + dataBR_(r.ate) + ')';
+
+  MailApp.sendEmail({
+    to: destino,
+    subject: assunto,
+    htmlBody: montarHtmlRelatorio_(r, assunto),
+    body: montarTextoRelatorio_(r),
+    name: 'Quadro de Tarefas'
+  });
+
+  return { destino: destino, assunto: assunto, relatorio: r };
+}
+
+/** Disparo manual pelo app. */
+function apiEnviarRelatorio_(p) {
+  var res = enviarRelatorioSemanal(p && p.de, p && p.ate);
+  return {
+    ok: true,
+    destino: res.destino,
+    assunto: res.assunto,
+    relatorio: res.relatorio,
+    msg: 'Relatório enviado para ' + res.destino
+  };
+}
+
+/** Segunda-feira passada até o domingo de ontem. */
+function semanaFechadaAnterior_(hoje) {
+  var dow = parseISO_(hoje).getDay();          // 0=Dom ... 6=Sáb
+  var segundaDestaSemana = somarDias_(hoje, -((dow + 6) % 7));
+  return { de: somarDias_(segundaDestaSemana, -7), ate: somarDias_(segundaDestaSemana, -1) };
+}
+
+/** Monta todos os números do relatório, sem enviar nada. */
+function calcularRelatorioSemanal_(de, ate) {
+  if (!de || !ate) {
+    var s = semanaFechadaAnterior_(hojeISO_());
+    de = de || s.de;
+    ate = ate || s.ate;
+  }
+
+  var cfg = lerConfig_();
+  var tarefas = lerTabela_('tarefas').map(normalizarTarefa_);
+  var recompensas = lerTabela_('recompensas').map(normalizarRecompensa_);
+  var registros = lerTabela_('registros').map(normalizarRegistro_);
+  var porId = {};
+  tarefas.forEach(function (t) { porId[t.id] = t; });
+
+  /* ---------- obrigatórias (básicas que contam para a semanada) ---------- */
+  var previstas = 0, feitas = 0;
+  var faltas = [];            // { data, titulo, icone }
+  var feitasLista = [];       // { titulo, icone, vezes }
+  var contagemFeitas = {};
+
+  var dia = de, guarda = 0;
+  while (dia <= ate && guarda++ < 60) {
+    var dow = parseISO_(dia).getDay();
+    var doDia = tarefas.filter(function (t) {
+      return t.ativa === 'sim' && t.tipo === 'basica' && t.conta_mesada === 'sim' && tarefaNoDia_(t, dow);
+    });
+    var aprovadasDoDia = {};
+    registros.forEach(function (r) {
+      if (r.data === dia && r.status === 'aprovada') aprovadasDoDia[r.tarefa_id] = true;
+    });
+
+    doDia.forEach(function (t) {
+      previstas++;
+      if (aprovadasDoDia[t.id]) {
+        feitas++;
+        contagemFeitas[t.id] = (contagemFeitas[t.id] || 0) + 1;
+      } else {
+        faltas.push({ data: dia, titulo: t.titulo, icone: t.icone });
+      }
+    });
+    dia = somarDias_(dia, 1);
+  }
+
+  Object.keys(contagemFeitas).forEach(function (id) {
+    var t = porId[id];
+    feitasLista.push({ titulo: t ? t.titulo : 'Tarefa removida', icone: t ? t.icone : '✅', vezes: contagemFeitas[id] });
+  });
+  feitasLista.sort(function (a, b) { return b.vezes - a.vezes; });
+
+  var pct = previstas ? Math.round((feitas / previstas) * 100) : 0;
+
+  /* ---------- extras e pontos ---------- */
+  var extras = [];
+  var pontosGanhos = 0, pontosGastos = 0, pontosReservados = 0;
+
+  registros.forEach(function (r) {
+    if (r.data < de || r.data > ate) return;
+
+    if (ehResgate_(r.tarefa_id)) {
+      var recId = String(r.tarefa_id).slice(PREFIXO_RESGATE.length);
+      var rec = recompensas.filter(function (x) { return x.id === recId; })[0];
+      var custo = Math.abs(r.pontos_ganhos) || (rec ? rec.custo_pontos : 0);
+      if (r.status === 'aprovada') pontosGastos += custo;
+      else if (r.status === 'pendente_aprovacao') pontosReservados += custo;
+      return;
+    }
+
+    if (r.status !== 'aprovada' || r.pontos_ganhos <= 0) return;
+    var t = porId[r.tarefa_id];
+    if (t && t.tipo !== 'extra') return;
+    pontosGanhos += r.pontos_ganhos;
+    extras.push({
+      data: r.data,
+      titulo: t ? t.titulo : 'Tarefa removida',
+      icone: t ? t.icone : '⭐',
+      pontos: r.pontos_ganhos
+    });
+  });
+  extras.sort(function (a, b) { return a.data < b.data ? -1 : 1; });
+
+  /* ---------- semanada ---------- */
+  var base = Number(String(cfg.valor_semanada_base).replace(',', '.')) || 0;
+  var porFalta = Number(String(cfg.valor_desconto_falta).replace(',', '.')) || 0;
+  var modo = String(cfg.modo_desconto || 'fixo').trim().toLowerCase();
+
+  var desconto;
+  if (modo === 'nenhum') desconto = 0;
+  else if (modo === 'proporcional') desconto = previstas ? base * (faltas.length / previstas) : 0;
+  else { modo = 'fixo'; desconto = faltas.length * porFalta; }
+  desconto = Math.min(arred2_(desconto), base);
+  var aPagar = arred2_(Math.max(0, base - desconto));
+
+  return {
+    de: de,
+    ate: ate,
+    config: cfg,
+    semanada: {
+      base: arred2_(base),
+      faltas: faltas.length,
+      modo_desconto: modo,
+      valor_desconto_falta: arred2_(porFalta),
+      desconto: arred2_(desconto),
+      a_pagar: aPagar
+    },
+    basicas: {
+      previstas: previstas,
+      feitas: feitas,
+      pct: pct,
+      faltas: faltas,
+      feitas_lista: feitasLista
+    },
+    extras: {
+      quantidade: extras.length,
+      lista: extras,
+      pontos_ganhos: pontosGanhos,
+      pontos_gastos: pontosGastos,
+      pontos_reservados: pontosReservados
+    },
+    saldo_atual: calcularSaldo_(registros),
+    gerado_em: agoraISO_()
+  };
+}
+
+/* ---------- montagem do e-mail ---------- */
+
+function montarHtmlRelatorio_(r, assunto) {
+  var nome = escaparHtml_(r.config.nome_crianca || 'Criança');
+  var cinza = '#6d6782', roxo = '#6d4bd8', verde = '#1faa72', vermelho = '#e04545';
+
+  function linhasFaltas() {
+    if (!r.basicas.faltas.length) {
+      return '<p style="margin:0;padding:14px;background:#e3f8ee;border-radius:12px;color:' + verde +
+             ';font-weight:bold">🎉 Nenhuma falta na semana. Semanada cheia!</p>';
+    }
+    var linhas = r.basicas.faltas.map(function (f) {
+      return '<tr>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #eee">' + escaparHtml_(f.icone) + ' ' + escaparHtml_(f.titulo) + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right;color:' + cinza + ';white-space:nowrap">' +
+        diaSemanaBR_(f.data) + ', ' + dataBR_(f.data) + '</td></tr>';
+    }).join('');
+    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' +
+           'style="border-collapse:collapse;font-size:15px">' + linhas + '</table>';
+  }
+
+  function linhasFeitas() {
+    if (!r.basicas.feitas_lista.length) return '<p style="margin:0;color:' + cinza + '">Nenhuma tarefa obrigatória concluída.</p>';
+    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:15px">' +
+      r.basicas.feitas_lista.map(function (f) {
+        return '<tr><td style="padding:8px 10px;border-bottom:1px solid #eee">' +
+          escaparHtml_(f.icone) + ' ' + escaparHtml_(f.titulo) + '</td>' +
+          '<td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right;color:' + cinza + ';white-space:nowrap">' +
+          f.vezes + '×</td></tr>';
+      }).join('') + '</table>';
+  }
+
+  function linhasExtras() {
+    if (!r.extras.lista.length) return '<p style="margin:0;color:' + cinza + '">Nenhuma tarefa extra nesta semana.</p>';
+    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:15px">' +
+      r.extras.lista.map(function (e) {
+        return '<tr><td style="padding:8px 10px;border-bottom:1px solid #eee">' +
+          escaparHtml_(e.icone) + ' ' + escaparHtml_(e.titulo) +
+          '<br><span style="color:' + cinza + ';font-size:12px">' + diaSemanaBR_(e.data) + ', ' + dataBR_(e.data) + '</span></td>' +
+          '<td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right;font-weight:bold;color:' + roxo + ';white-space:nowrap">+' +
+          e.pontos + ' pts</td></tr>';
+      }).join('') + '</table>';
+  }
+
+  function bloco(titulo, conteudo) {
+    return '<tr><td style="padding:0 16px 16px">' +
+      '<div style="background:#ffffff;border:1px solid #e7e3f2;border-radius:16px;padding:16px">' +
+      '<h2 style="margin:0 0 12px;font-size:16px;color:#221b36">' + titulo + '</h2>' +
+      conteudo + '</div></td></tr>';
+  }
+
+  var descontoTxt = r.semanada.modo_desconto === 'proporcional'
+    ? 'desconto proporcional às faltas'
+    : (r.semanada.modo_desconto === 'nenhum'
+        ? 'sem desconto por falta'
+        : dinheiroBR_(r.semanada.valor_desconto_falta) + ' por falta');
+
+  return '<!doctype html><html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>' + escaparHtml_(assunto) + '</title></head>' +
+    '<body style="margin:0;padding:0;background:#f6f4fb;' +
+    'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Arial,sans-serif;color:#221b36">' +
+    '<div style="display:none;max-height:0;overflow:hidden;opacity:0">' +
+      'Semanada ' + dinheiroBR_(r.semanada.a_pagar) + ' · ' + r.basicas.pct + '% das obrigatórias · ' +
+      r.extras.pontos_ganhos + ' pontos extras' +
+    '</div>' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f4fb">' +
+    '<tr><td align="center" style="padding:16px 8px">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%">' +
+
+      '<tr><td style="padding:0 16px 16px">' +
+        '<div style="background:linear-gradient(140deg,#6d4bd8,#4f32ad);border-radius:18px;padding:20px;color:#ffffff">' +
+          '<div style="font-size:13px;opacity:.9">Resumo semanal · ' + dataBR_(r.de) + ' a ' + dataBR_(r.ate) + '</div>' +
+          '<div style="font-size:22px;font-weight:bold;margin:2px 0 14px">' + nome + '</div>' +
+          '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>' +
+            '<td style="background:rgba(255,255,255,.16);border-radius:12px;padding:12px;width:50%">' +
+              '<div style="font-size:12px;opacity:.9">Semanada a pagar</div>' +
+              '<div style="font-size:24px;font-weight:bold">' + dinheiroBR_(r.semanada.a_pagar) + '</div>' +
+            '</td><td style="width:8px"></td>' +
+            '<td style="background:rgba(255,255,255,.16);border-radius:12px;padding:12px;width:50%">' +
+              '<div style="font-size:12px;opacity:.9">Saldo de pontos</div>' +
+              '<div style="font-size:24px;font-weight:bold">⭐ ' + r.saldo_atual + '</div>' +
+            '</td>' +
+          '</tr></table>' +
+        '</div>' +
+      '</td></tr>' +
+
+      bloco('💰 Como chegamos nesse valor',
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:15px">' +
+          '<tr><td style="padding:6px 0">Valor base da semana</td>' +
+              '<td style="padding:6px 0;text-align:right">' + dinheiroBR_(r.semanada.base) + '</td></tr>' +
+          '<tr><td style="padding:6px 0">Faltas nas obrigatórias <span style="color:' + cinza + ';font-size:12px">(' + descontoTxt + ')</span></td>' +
+              '<td style="padding:6px 0;text-align:right;color:' + (r.semanada.desconto > 0 ? vermelho : cinza) + '">' +
+              (r.semanada.desconto > 0 ? '− ' + dinheiroBR_(r.semanada.desconto) : dinheiroBR_(0)) +
+              ' <span style="color:' + cinza + ';font-size:12px">(' + r.semanada.faltas + ')</span></td></tr>' +
+          '<tr><td style="padding:10px 0 0;border-top:2px solid #e7e3f2;font-weight:bold">Total a pagar</td>' +
+              '<td style="padding:10px 0 0;border-top:2px solid #e7e3f2;text-align:right;font-weight:bold;font-size:18px;color:' + verde + '">' +
+              dinheiroBR_(r.semanada.a_pagar) + '</td></tr>' +
+        '</table>') +
+
+      bloco('✅ Tarefas obrigatórias — ' + r.basicas.feitas + ' de ' + r.basicas.previstas + ' (' + r.basicas.pct + '%)',
+        '<div style="background:#efeafc;border-radius:99px;height:10px;overflow:hidden;margin-bottom:14px">' +
+          '<div style="background:' + verde + ';height:10px;width:' + r.basicas.pct + '%"></div></div>' +
+        linhasFeitas() +
+        '<h3 style="margin:16px 0 8px;font-size:14px;color:' + (r.basicas.faltas.length ? vermelho : verde) + '">' +
+        (r.basicas.faltas.length ? '⚠️ Faltaram ' + r.basicas.faltas.length : '🎉 Sem faltas') + '</h3>' +
+        linhasFaltas()) +
+
+      bloco('⭐ Extras e pontos',
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:15px;margin-bottom:12px">' +
+          '<tr><td style="padding:4px 0">Extras concluídas</td><td style="padding:4px 0;text-align:right;font-weight:bold">' + r.extras.quantidade + '</td></tr>' +
+          '<tr><td style="padding:4px 0">Pontos ganhos na semana</td><td style="padding:4px 0;text-align:right;font-weight:bold;color:' + verde + '">+' + r.extras.pontos_ganhos + '</td></tr>' +
+          '<tr><td style="padding:4px 0">Pontos gastos na lojinha</td><td style="padding:4px 0;text-align:right;font-weight:bold;color:' +
+            (r.extras.pontos_gastos ? vermelho : cinza) + '">' + (r.extras.pontos_gastos ? '−' + r.extras.pontos_gastos : '0') + '</td></tr>' +
+          (r.extras.pontos_reservados ? '<tr><td style="padding:4px 0;color:' + cinza + '">Pedidos aguardando sua aprovação</td>' +
+            '<td style="padding:4px 0;text-align:right;color:' + cinza + '">' + r.extras.pontos_reservados + ' pts</td></tr>' : '') +
+          '<tr><td style="padding:8px 0 0;border-top:1px solid #e7e3f2;font-weight:bold">Saldo atual</td>' +
+              '<td style="padding:8px 0 0;border-top:1px solid #e7e3f2;text-align:right;font-weight:bold">⭐ ' + r.saldo_atual + '</td></tr>' +
+        '</table>' + linhasExtras()) +
+
+      '<tr><td style="padding:0 16px 24px;text-align:center;color:' + cinza + ';font-size:12px;line-height:1.5">' +
+        'Enviado automaticamente pelo Quadro de Tarefas.<br>' +
+        'Para mudar o e-mail ou os valores, use a área dos pais do app.' +
+      '</td></tr>' +
+
+    '</table></td></tr></table></body></html>';
+}
+
+/** Versão em texto puro (acessibilidade e clientes sem HTML). */
+function montarTextoRelatorio_(r) {
+  var l = [];
+  l.push('Resumo semanal de ' + (r.config.nome_crianca || 'Criança') + ' (' + dataBR_(r.de) + ' a ' + dataBR_(r.ate) + ')');
+  l.push('');
+  l.push('SEMANADA A PAGAR: ' + dinheiroBR_(r.semanada.a_pagar));
+  l.push('  base ' + dinheiroBR_(r.semanada.base) + ' - desconto ' + dinheiroBR_(r.semanada.desconto) +
+         ' (' + r.semanada.faltas + ' falta(s), modo ' + r.semanada.modo_desconto + ')');
+  l.push('SALDO DE PONTOS: ' + r.saldo_atual);
+  l.push('');
+  l.push('OBRIGATÓRIAS: ' + r.basicas.feitas + '/' + r.basicas.previstas + ' (' + r.basicas.pct + '%)');
+  if (r.basicas.faltas.length) {
+    l.push('Faltas:');
+    r.basicas.faltas.forEach(function (f) { l.push('  - ' + f.titulo + ' (' + dataBR_(f.data) + ')'); });
+  } else {
+    l.push('Nenhuma falta na semana.');
+  }
+  l.push('');
+  l.push('EXTRAS: ' + r.extras.quantidade + ' concluída(s), +' + r.extras.pontos_ganhos + ' pontos');
+  r.extras.lista.forEach(function (e) { l.push('  - ' + e.titulo + ' (' + dataBR_(e.data) + ') +' + e.pontos); });
+  l.push('Pontos gastos na lojinha: ' + r.extras.pontos_gastos);
+  return l.join('\n');
+}
+
+/** Cria (ou recria) o gatilho de segunda-feira às 8h. */
+function configurarGatilhoRelatorioSemanal() {
+  var removidos = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'enviarRelatorioSemanal') {
+      ScriptApp.deleteTrigger(t);
+      removidos++;
+    }
+  });
+  ScriptApp.newTrigger('enviarRelatorioSemanal')
+    .timeBased()
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(8)
+    .create();
+  return 'Gatilho semanal criado para segunda-feira por volta das 8h' +
+         (removidos ? ' (' + removidos + ' gatilho(s) antigo(s) removido(s)).' : '.');
+}
+
+function dataBR_(iso) {
+  var p = String(iso).split('-');
+  return p.length === 3 ? p[2] + '/' + p[1] : String(iso);
+}
+
+function diaSemanaBR_(iso) {
+  return ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'][parseISO_(iso).getDay()];
+}
+
+function dinheiroBR_(v) {
+  return 'R$ ' + (Number(v) || 0).toFixed(2).replace('.', ',');
+}
+
+function escaparHtml_(s) {
+  return String(s === undefined || s === null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /* ============================================================

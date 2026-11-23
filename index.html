@@ -147,8 +147,33 @@
         <label>Novo PIN (4 dígitos — deixe vazio para manter)
           <input type="text" name="pin_pais" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="off">
         </label>
+
+        <h3 class="sub sub-form">Relatório semanal por e-mail</h3>
+        <label>E-mail que recebe o relatório
+          <input type="email" name="email_relatorio" inputmode="email" autocomplete="email" placeholder="voce@exemplo.com">
+        </label>
+        <div class="linha-campos">
+          <label>Semanada base (R$)
+            <input type="number" name="valor_semanada_base" step="0.01" min="0" inputmode="decimal">
+          </label>
+          <label>Desconto por falta (R$)
+            <input type="number" name="valor_desconto_falta" step="0.01" min="0" inputmode="decimal">
+          </label>
+        </div>
+        <label>Como descontar as faltas
+          <select name="modo_desconto">
+            <option value="fixo">Valor fixo por falta</option>
+            <option value="proporcional">Proporcional às faltas</option>
+            <option value="nenhum">Não descontar</option>
+          </select>
+        </label>
+
         <button class="btn-primario" type="submit">Salvar configurações</button>
       </form>
+      <button class="btn-secundario largo" id="btnEnviarRelatorio">📧 Enviar relatório semanal agora</button>
+      <p class="dica" id="dicaRelatorio">Toda segunda-feira de manhã o relatório da semana fechada
+        (segunda a domingo) é enviado sozinho, se você rodar <code>configurarGatilhoRelatorioSemanal()</code>
+        uma vez no Apps Script.</p>
       <button class="btn-perigo largo" id="btnEsquecerAparelho">🔒 Bloquear e esquecer este aparelho</button>
       <p class="dica">Link direto para esta área: <code id="linkPais"></code>
         <button class="btn-secundario" id="btnCopiarLink">Copiar</button></p>

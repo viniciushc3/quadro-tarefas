@@ -164,6 +164,37 @@ Quando o servidor recebe a tarefa mas não consegue guardar a imagem, a tarefa *
 > `precisa_foto` e `foto_url` ao fim das abas existentes (sem tocar nos dados) e pede a nova
 > autorização de acesso ao Google Drive. Depois publique **Nova versão** da implantação.
 
+## Relatório semanal por e-mail
+
+Toda segunda-feira de manhã chega um resumo da **semana fechada anterior** (segunda a domingo) no
+e-mail configurado — com a semanada a pagar, o cumprimento das obrigatórias, as faltas (com data) e
+os extras da semana.
+
+**Ligar (uma vez):**
+
+1. Na área dos pais → aba **Mesada** → bloco *Relatório semanal por e-mail*: preencha o e-mail,
+   a semanada base, o desconto por falta e como descontar. Salve.
+2. Toque em **📧 Enviar relatório semanal agora** para testar na hora.
+3. No Apps Script, rode uma vez **`configurarGatilhoRelatorioSemanal()`** — ele remove gatilhos
+   antigos da mesma função e cria o agendamento de segunda às 8h.
+
+**Chaves novas na aba `config`:**
+
+| chave | padrão | o que faz |
+|---|---|---|
+| `email_relatorio` | *(vazio)* | destinatário do relatório |
+| `valor_semanada_base` | `12.50` | valor cheio da semana |
+| `modo_desconto` | `fixo` | `fixo` (R$ por falta) · `proporcional` (fração da base) · `nenhum` |
+| `valor_desconto_falta` | `1.00` | usado quando `modo_desconto = fixo` |
+
+**Como a semanada é apurada:** contam as tarefas `basica` com `ativa = sim` e `conta_mesada = sim`,
+previstas dia a dia pela recorrência. Cada ocorrência sem registro `aprovada` é uma falta.
+O desconto nunca passa do valor base — a semanada não fica negativa.
+
+> O envio usa `MailApp`, que exige o escopo `script.send_mail` no `appsscript.json`
+> (já incluído no arquivo deste repositório). Contas gratuitas do Gmail enviam até 100 e-mails por dia,
+> de sobra para um relatório semanal.
+
 ## Regras de cálculo
 
 - **Saldo de pontos** = soma de `pontos_ganhos` dos registros `aprovada`, menos os resgates (pedidos ou aprovados).

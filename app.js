@@ -195,6 +195,8 @@ async function apiGet(action, params = {}) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return conferir(await r.json());
   } catch (e) {
+    // Resposta válida com erro de regra não é problema de rede: não tenta JSONP.
+    if (e.doServidor) throw e;
     return conferir(await jsonp(url));
   }
 }
@@ -1075,6 +1077,11 @@ function preencherFormConfig() {
   f.nome_crianca.value = cache.config.nome_crianca || '';
   f.valor_mesada_base.value = cache.config.valor_mesada_base || '';
   f.valor_por_ponto.value = cache.config.valor_por_ponto || '';
+  f.email_relatorio.value = cache.config.email_relatorio || '';
+  f.valor_semanada_base.value = cache.config.valor_semanada_base || '';
+  f.valor_desconto_falta.value = cache.config.valor_desconto_falta || '';
+  f.modo_desconto.value = ['fixo', 'proporcional', 'nenhum'].includes(cache.config.modo_desconto)
+    ? cache.config.modo_desconto : 'fixo';
 }
 
 /* ------------------------------------------------------------
@@ -1436,6 +1443,61 @@ document.getElementById('btnAbrirPais').addEventListener('click', () => irPara('
 
 document.getElementById('btnSairPais').addEventListener('click', () => irPara('#tarefas'));
 
+document.getElementById('btnEnviarRelatorio').addEventListener('click', enviarRelatorioAgora);
+
+/** Salva o que estiver no formulário, espera a fila esvaziar e dispara o e-mail. */
+async function enviarRelatorioAgora() {
+  const botao = document.getElementById('btnEnviarRelatorio');
+  const f = document.getElementById('formConfig');
+  const email = f.email_relatorio.value.trim();
+
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    toast('✉️ Preencha um e-mail válido para o relatório');
+    f.email_relatorio.focus();
+    return;
+  }
+  if (!navigator.onLine || !apiConfigurada()) {
+    toast('📴 Precisa de internet para enviar o relatório');
+    return;
+  }
+
+  const rotulo = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = '⏳ Enviando...';
+  try {
+    // garante que o e-mail e os valores digitados já estejam na planilha
+    const mudou = ['email_relatorio', 'valor_semanada_base', 'valor_desconto_falta', 'modo_desconto']
+      .some(k => String(cache.config[k] === undefined ? '' : cache.config[k]) !== String(f[k].value).trim());
+    if (mudou) {
+      salvarConfig({
+        nome_crianca: f.nome_crianca.value.trim(),
+        valor_mesada_base: f.valor_mesada_base.value,
+        valor_por_ponto: f.valor_por_ponto.value,
+        email_relatorio: email,
+        valor_semanada_base: f.valor_semanada_base.value,
+        valor_desconto_falta: f.valor_desconto_falta.value,
+        modo_desconto: f.modo_desconto.value
+      });
+    }
+    await flush();
+
+    const r = await apiPost('enviar_relatorio_semanal', { pin: pinLocal });
+    const rel = r.relatorio || {};
+    const resumo = rel.semanada
+      ? ' · semanada ' + dinheiro(rel.semanada.a_pagar) + ' (' + rel.basicas.pct + '% das obrigatórias)'
+      : '';
+    toast('📧 Enviado para ' + r.destino + resumo);
+    document.getElementById('dicaRelatorio').textContent =
+      'Último envio manual: ' + (rel.de ? dataCurta(rel.de) + ' a ' + dataCurta(rel.ate) : 'agora') +
+      resumo.replace(' · ', ' — ');
+  } catch (e) {
+    toast('⚠️ ' + (e.message || 'Não deu para enviar o relatório'));
+  } finally {
+    botao.disabled = false;
+    botao.textContent = rotulo;
+  }
+}
+
 document.getElementById('btnEsquecerAparelho').addEventListener('click', () => {
   bloquearPais();
   toast('🔒 Área dos pais bloqueada neste aparelho');
@@ -1487,7 +1549,11 @@ document.getElementById('formConfig').addEventListener('submit', e => {
   const itens = {
     nome_crianca: f.nome_crianca.value.trim(),
     valor_mesada_base: f.valor_mesada_base.value,
-    valor_por_ponto: f.valor_por_ponto.value
+    valor_por_ponto: f.valor_por_ponto.value,
+    email_relatorio: f.email_relatorio.value.trim(),
+    valor_semanada_base: f.valor_semanada_base.value,
+    valor_desconto_falta: f.valor_desconto_falta.value,
+    modo_desconto: f.modo_desconto.value
   };
   const novoPin = f.pin_pais.value.trim();
   if (novoPin) {
